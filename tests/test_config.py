@@ -43,7 +43,7 @@ def test_invalid_numbers_are_errors(section, key, value):
 
 
 def test_unknown_top_level_sections_are_ignored():
-    cfg = parse_config({**MINIMAL, "recording": {"mode": "both"}})
+    cfg = parse_config({**MINIMAL, "motion": {"fps": 5}})
     assert cfg.camera.device == "testsrc"
 
 
@@ -60,3 +60,31 @@ def test_example_config_parses():
     import yaml
     cfg = parse_config(yaml.safe_load(text))
     assert cfg.camera.device.startswith("/dev/v4l/by-id/")
+
+
+def test_recording_and_storage_defaults():
+    cfg = parse_config(MINIMAL)
+    r, s = cfg.recording, cfg.storage
+    assert (r.fps, r.crf, r.preset, r.segment_seconds, r.keyframe_seconds) == (10, 28, "veryfast", 60, 2)
+    assert (s.path, s.quota_gb, s.min_free_gb) == ("~/raspcam-data", 5.0, 1.0)
+
+
+@pytest.mark.parametrize("section,key,value", [
+    ("recording", "fps", 0),
+    ("recording", "segment_seconds", -5),
+    ("recording", "crf", 60),
+    ("storage", "quota_gb", 0),
+    ("storage", "min_free_gb", -1),
+])
+def test_invalid_recording_and_storage_values(section, key, value):
+    with pytest.raises(ConfigError, match=key):
+        parse_config({**MINIMAL, section: {key: value}})
+
+
+def test_keyframe_interval_must_fit_in_segment():
+    with pytest.raises(ConfigError, match="keyframe_seconds"):
+        parse_config({**MINIMAL, "recording": {"segment_seconds": 1, "keyframe_seconds": 2}})
+
+
+def test_float_quota_is_accepted():
+    assert parse_config({**MINIMAL, "storage": {"quota_gb": 0.5}}).storage.quota_gb == 0.5
