@@ -75,14 +75,18 @@ def test_stop_terminates_child_quickly(latest):
     assert not rec.running
 
 
-@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
-def test_real_ffmpeg_with_test_source(latest):
-    cfg = parse_config({
-        "camera": {"device": "testsrc", "width": 640, "height": 360, "input_fps": 10},
-        "live": {"width": 320, "height": 180, "fps": 5},
+def small_cfg():
+    return parse_config({
+        "camera": {"device": "testsrc", "width": 320, "height": 180, "input_fps": 10},
+        "live": {"width": 160, "height": 90, "fps": 5},
+        "recording": {"fps": 5, "segment_seconds": 1, "keyframe_seconds": 1},
         "web": {"password_hash": "scrypt$x"},
     })
-    rec = Recorder(build_command(cfg), latest)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_real_ffmpeg_with_test_source(latest, tmp_path):
+    rec = Recorder(build_command(small_cfg(), tmp_path), latest)
     rec.start()
     try:
         assert wait_until(lambda: latest.get()[0] >= 3, timeout=10)
@@ -90,3 +94,22 @@ def test_real_ffmpeg_with_test_source(latest):
         assert jpeg.startswith(b"\xff\xd8") and jpeg.endswith(b"\xff\xd9")
     finally:
         rec.stop()
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_real_ffmpeg_writes_indexable_segments(latest, tmp_path):
+    from raspcam.db import SegmentStore
+    from raspcam.segments import Indexer
+    seg_dir = tmp_path / "segments"
+    seg_dir.mkdir()
+    rec = Recorder(build_command(small_cfg(), seg_dir), latest)
+    rec.start()
+    try:
+        assert wait_until(lambda: len(list(seg_dir.glob("*.mp4"))) >= 3, timeout=10)
+    finally:
+        rec.stop()
+    store = SegmentStore(tmp_path / "db.sqlite")
+    added = Indexer(store, seg_dir, settle_seconds=0).scan(writing=False)
+    assert len(added) >= 2
+    full = store.oldest_first()[1:-1]  # first/last may be partial
+    assert all(0.5 <= s.duration <= 1.5 for s in full)

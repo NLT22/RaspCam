@@ -1,7 +1,10 @@
 """Build the ffmpeg command line from config."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from .config import Config
+from .segments import SEGMENT_PATTERN
 
 TEST_SOURCE = "testsrc"
 
@@ -17,15 +20,25 @@ def _input_args(cfg: Config) -> list[str]:
             "-framerate", str(cam.input_fps), "-i", cam.device]
 
 
-def build_command(cfg: Config) -> list[str]:
-    """ffmpeg argv that writes the live MJPEG stream to stdout."""
-    live = cfg.live
+def build_command(cfg: Config, segments_dir: Path) -> list[str]:
+    """ffmpeg argv: H.264 segments into segments_dir, live MJPEG on stdout."""
+    rec, live = cfg.recording, cfg.live
+    graph = (f"[0:v]split=2[r][l];"
+             f"[r]fps={rec.fps}[rec];"
+             f"[l]fps={live.fps},scale={live.width}:{live.height}[live]")
     return [
         # "error": swscale prints a harmless "deprecated pixel format" warning for
         # MJPEG input that would otherwise show up as last_error in the UI
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
         *_input_args(cfg),
-        "-vf", f"fps={live.fps},scale={live.width}:{live.height}",
-        "-c:v", "mjpeg", "-q:v", str(live.quality),
+        "-filter_complex", graph,
+        "-map", "[rec]",
+        "-c:v", "libx264", "-preset", rec.preset, "-crf", str(rec.crf),
+        "-pix_fmt", "yuv420p", "-g", str(rec.fps * rec.keyframe_seconds),
+        "-f", "segment", "-segment_time", str(rec.segment_seconds),
+        "-segment_atclocktime", "1", "-reset_timestamps", "1", "-strftime", "1",
+        "-segment_format_options", "movflags=+faststart",
+        str(segments_dir / SEGMENT_PATTERN),
+        "-map", "[live]", "-c:v", "mjpeg", "-q:v", str(live.quality),
         "-f", "mjpeg", "pipe:1",
     ]
