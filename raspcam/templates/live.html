@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block body %}
+<header>
+  <strong>RaspCam</strong>
+  <form method="post" action="/logout" style="margin:0"><button type="submit">Đăng xuất</button></form>
+</header>
+<main>
+  <div class="card">
+    <img id="live" src="/live.mjpg" alt="Camera trực tiếp"
+         style="width:100%; height:auto; display:block; border-radius:8px; background:#000; aspect-ratio:16/9">
+    <p id="status" class="muted">Đang kết nối…</p>
+  </div>
+</main>
+<script>
+  const statusEl = document.getElementById("status");
+  const img = document.getElementById("live");
+  let wasDown = false;
+  async function refresh() {
+    try {
+      const r = await fetch("/api/status");
+      if (r.status === 401) { location.href = "/login"; return; }
+      const s = await r.json();
+      let text = s.camera_online ? "● Camera online" : "● Camera offline";
+      text += ` · ffmpeg khởi động lại: ${s.restarts}`;
+      if (!s.camera_online && s.last_error) text += ` · lỗi: ${s.last_error}`;
+      statusEl.textContent = text;
+      statusEl.style.color = s.camera_online ? "var(--ok)" : "var(--bad)";
+      if (s.camera_online && wasDown) img.src = "/live.mjpg?t=" + Date.now();
+      wasDown = !s.camera_online;
+    } catch (e) {
+      statusEl.textContent = "● Mất kết nối tới Pi";
+      statusEl.style.color = "var(--bad)";
+      wasDown = true;
+    }
+  }
+  refresh();
+  setInterval(refresh, 2000);
+</script>
+{% endblock %}
