@@ -1,0 +1,23 @@
+# Copy to config.yaml, then fill web.password_hash and web.secret_key.
+# Generate both with:  python -m raspcam.auth
+
+camera:
+  device: /dev/v4l/by-id/usb-Wed_Camera_Wed_Camera_20240420112206-video-index0
+  # device: testsrc       # ffmpeg test pattern, for development without a camera
+  input_format: mjpeg
+  width: 1920
+  height: 1080
+  input_fps: 30
+
+live:
+  width: 1280
+  height: 720
+  fps: 5
+  quality: 5              # 2 (best) .. 31 (worst)
+
+web:
+  host: 0.0.0.0
+  port: 8080
+  username: admin
+  password_hash: ""
+  secret_key: ""

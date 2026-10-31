@@ -4,3 +4,4 @@ __pycache__/
 .pytest_cache/
 config.yaml
 raspcam-data/
+*.egg-info/
