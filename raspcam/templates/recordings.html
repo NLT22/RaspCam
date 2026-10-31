@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block body %}
+{% include "nav.html" %}
+<main>
+  <div class="card">
+    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:12px">
+      <h2 style="margin:0">Xem lại</h2>
+      <select id="day" aria-label="Ngày"></select>
+      <span id="now" class="muted"></span>
+    </div>
+    <video id="player" controls muted playsinline
+           style="width:100%; display:block; background:#000; border-radius:8px; aspect-ratio:16/9"></video>
+    <div id="list"></div>
+  </div>
+</main>
+<script>
+  const daySel = document.getElementById("day");
+  const list = document.getElementById("list");
+  const player = document.getElementById("player");
+  const nowEl = document.getElementById("now");
+  let segs = [], buttons = [], current = -1;
+  const time = ts => new Date(ts * 1000).toLocaleTimeString("vi-VN", {hour12: false});
+  const pad = n => String(n).padStart(2, "0");
+
+  async function api(url) {
+    const r = await fetch(url);
+    if (r.status === 401) { location.href = "/login"; throw new Error("401"); }
+    return r.json();
+  }
+
+  async function loadDays() {
+    const days = await api("/api/days");
+    daySel.innerHTML = days.map(d => `<option>${d}</option>`).join("");
+    if (!days.length) { list.textContent = "Chưa có bản ghi nào."; return; }
+    await loadDay(days[0]);
+  }
+
+  async function loadDay(day) {
+    segs = await api("/api/segments?day=" + encodeURIComponent(day));
+    list.innerHTML = "";
+    buttons = [];
+    const rows = {};
+    segs.forEach((s, i) => {
+      const d = new Date(s.start * 1000);
+      const h = pad(d.getHours());
+      if (!rows[h]) {
+        rows[h] = document.createElement("div");
+        rows[h].className = "hour";
+        rows[h].innerHTML = `<span class="muted">${h}:00</span>`;
+        list.appendChild(rows[h]);
+      }
+      const b = document.createElement("button");
+      b.className = "seg";
+      b.textContent = pad(d.getMinutes());
+      b.title = `${time(s.start)} · ${Math.round(s.duration)} giây · ${(s.size / 1e6).toFixed(1)} MB`;
+      b.onclick = () => play(i);
+      rows[h].appendChild(b);
+      buttons.push(b);
+    });
+  }
+
+  function play(i) {
+    if (i < 0 || i >= segs.length) return;
+    current = i;
+    player.src = "/media/" + segs[i].name;
+    player.play();
+    nowEl.textContent = `${time(segs[i].start)} – ${time(segs[i].end)}`;
+    buttons.forEach((b, j) => b.classList.toggle("active", j === i));
+  }
+
+  player.addEventListener("ended", () => play(current + 1));
+  daySel.addEventListener("change", () => loadDay(daySel.value));
+  loadDays();
+</script>
+{% endblock %}

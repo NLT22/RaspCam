@@ -3,17 +3,21 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import shutil
 from pathlib import Path
 from typing import AsyncIterator, Awaitable, Callable
 
 from fastapi import FastAPI, Form, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from .auth import verify_password
 from .config import Config
+from .db import SegmentStore
 from .frames import LatestFrame
+from .retention import GB
+from .segments import parse_start
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 OFFLINE_AFTER = 5.0  # seconds without a frame before the camera counts as offline
@@ -35,8 +39,8 @@ async def mjpeg_stream(latest: LatestFrame, fps: int,
                f"Content-Length: {len(jpeg)}\r\n\r\n").encode() + jpeg + b"\r\n"
 
 
-def create_app(cfg: Config, latest: LatestFrame,
-               recorder_status: Callable[[], dict]) -> FastAPI:
+def create_app(cfg: Config, latest: LatestFrame, recorder_status: Callable[[], dict],
+               store: SegmentStore, segments_dir: Path) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(SessionMiddleware,
                        secret_key=cfg.web.secret_key or secrets.token_hex(32),
@@ -83,6 +87,40 @@ def create_app(cfg: Config, latest: LatestFrame,
             return Response(status_code=401)
         age = latest.age()
         return {"camera_online": age is not None and age < OFFLINE_AFTER,
-                "last_frame_age": age, **recorder_status()}
+                "last_frame_age": age, **recorder_status(),
+                "storage": {"used_bytes": store.total_size(),
+                            "quota_bytes": int(cfg.storage.quota_gb * GB),
+                            "free_bytes": shutil.disk_usage(segments_dir).free}}
+
+    @app.get("/recordings", response_class=HTMLResponse)
+    def recordings(request: Request):
+        if not logged_in(request):
+            return RedirectResponse("/login", status_code=303)
+        return TEMPLATES.TemplateResponse(request, "recordings.html", {})
+
+    @app.get("/api/days")
+    def days(request: Request):
+        if not logged_in(request):
+            return Response(status_code=401)
+        return store.days()
+
+    @app.get("/api/segments")
+    def segments(request: Request, day: str):
+        if not logged_in(request):
+            return Response(status_code=401)
+        return [{"name": s.name, "start": s.start_ts, "end": s.end_ts,
+                 "duration": s.duration, "size": s.size} for s in store.by_day(day)]
+
+    @app.get("/media/{name}")
+    def media(request: Request, name: str):
+        if not logged_in(request):
+            return Response(status_code=401)
+        # parse_start only accepts YYYYMMDD-HHMMSS.mp4, so no path tricks get through
+        if parse_start(name) is None or store.get(name) is None:
+            return Response(status_code=404)
+        path = segments_dir / name
+        if not path.is_file():
+            return Response(status_code=404)
+        return FileResponse(path, media_type="video/mp4")
 
     return app

@@ -1,10 +1,12 @@
 import asyncio
+import time
 
 import pytest
 from fastapi.testclient import TestClient
 
 from raspcam.auth import hash_password
 from raspcam.config import parse_config
+from raspcam.db import Segment, SegmentStore
 from raspcam.frames import LatestFrame
 from raspcam.web import create_app, mjpeg_stream
 
@@ -17,12 +19,24 @@ def latest():
 
 
 @pytest.fixture
-def client(latest):
+def store(tmp_path):
+    return SegmentStore(tmp_path / "db.sqlite")
+
+
+@pytest.fixture
+def seg_dir(tmp_path):
+    d = tmp_path / "segments"
+    d.mkdir()
+    return d
+
+
+@pytest.fixture
+def client(latest, store, seg_dir):
     cfg = parse_config({
         "camera": {"device": "testsrc"},
         "web": {"password_hash": hash_password("secret"), "secret_key": "k" * 32},
     })
-    return TestClient(create_app(cfg, latest, lambda: STATUS))
+    return TestClient(create_app(cfg, latest, lambda: STATUS, store, seg_dir))
 
 
 def login(client, password="secret"):
@@ -86,3 +100,55 @@ def test_mjpeg_stream_yields_each_new_frame_once(latest):
     assert len(chunks) == 1
     assert chunks[0].startswith(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 5\r\n\r\n")
     assert chunks[0].endswith(b"\xff\xd8x\xff\xd9\r\n")
+
+
+def add_segment(store, seg_dir, when="2026-11-01 10:00:00", data=b"0123456789"):
+    start = time.mktime(time.strptime(when, "%Y-%m-%d %H:%M:%S"))
+    name = time.strftime("%Y%m%d-%H%M%S.mp4", time.localtime(start))
+    (seg_dir / name).write_bytes(data)
+    store.add(Segment(name, start, start + 60, len(data)))
+    return name
+
+
+def test_recordings_endpoints_require_login(client):
+    assert client.get("/recordings", follow_redirects=False).status_code == 303
+    for url in ["/api/days", "/api/segments?day=2026-11-01", "/media/20261101-100000.mp4"]:
+        assert client.get(url).status_code == 401
+
+
+def test_days_and_segments(client, store, seg_dir):
+    name = add_segment(store, seg_dir)
+    login(client)
+    assert client.get("/api/days").json() == ["2026-11-01"]
+    [s] = client.get("/api/segments", params={"day": "2026-11-01"}).json()
+    assert s["name"] == name and s["duration"] == 60 and s["size"] == 10
+    assert s["end"] - s["start"] == 60
+
+
+def test_media_supports_range_requests(client, store, seg_dir):
+    name = add_segment(store, seg_dir)
+    login(client)
+    full = client.get(f"/media/{name}")
+    assert full.status_code == 200 and full.content == b"0123456789"
+    assert full.headers["content-type"] == "video/mp4"
+    part = client.get(f"/media/{name}", headers={"Range": "bytes=2-5"})
+    assert part.status_code == 206 and part.content == b"2345"
+
+
+def test_media_rejects_unknown_and_malicious_names(client, store, seg_dir):
+    login(client)
+    assert client.get("/media/20261101-100000.mp4").status_code == 404
+    assert client.get("/media/..%2Fdb.sqlite").status_code == 404
+
+
+def test_status_includes_storage(client, store, seg_dir):
+    add_segment(store, seg_dir)
+    login(client)
+    st = client.get("/api/status").json()["storage"]
+    assert st["used_bytes"] == 10 and st["quota_bytes"] == 5 * 10**9 and st["free_bytes"] > 0
+
+
+def test_recordings_page_renders(client):
+    login(client)
+    r = client.get("/recordings")
+    assert r.status_code == 200 and "Xem lại" in r.text and "<video" in r.text

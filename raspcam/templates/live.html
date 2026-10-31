@@ -1,9 +1,6 @@
 {% extends "base.html" %}
 {% block body %}
-<header>
-  <strong>RaspCam</strong>
-  <form method="post" action="/logout" style="margin:0"><button type="submit">Đăng xuất</button></form>
-</header>
+{% include "nav.html" %}
 <main>
   <div class="card">
     <img id="live" src="/live.mjpg" alt="Camera trực tiếp"
@@ -22,6 +19,8 @@
       const s = await r.json();
       let text = s.camera_online ? "● Camera online" : "● Camera offline";
       text += ` · ffmpeg khởi động lại: ${s.restarts}`;
+      const gb = b => (b / 1e9).toFixed(1);
+      text += ` · lưu trữ: ${gb(s.storage.used_bytes)}/${gb(s.storage.quota_bytes)} GB (ổ trống ${gb(s.storage.free_bytes)} GB)`;
       if (!s.camera_online && s.last_error) text += ` · lỗi: ${s.last_error}`;
       statusEl.textContent = text;
       statusEl.style.color = s.camera_online ? "var(--ok)" : "var(--bad)";
