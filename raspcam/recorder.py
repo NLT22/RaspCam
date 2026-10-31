@@ -34,7 +34,7 @@ class Recorder:
         self._thread = threading.Thread(target=self._run, name="recorder", daemon=True)
         self._thread.start()
 
-    def stop(self, timeout: float = 5.0) -> None:
+    def stop(self, timeout: float = 15.0) -> None:
         self._stop.set()
         with self._lock:
             proc = self._proc
@@ -75,8 +75,12 @@ class Recorder:
 
     def _run_once(self) -> None:
         try:
+            # Own session: a terminal's Ctrl+C must not reach ffmpeg as well as us.
+            # ffmpeg 7 aborts without writing the MP4 trailer on a second signal,
+            # so only stop() may signal it (systemd side: KillMode=mixed).
             proc = subprocess.Popen(self._argv, stdin=subprocess.DEVNULL,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    start_new_session=True)
         except OSError as e:
             self._stderr_tail.append(str(e))
             log.error("cannot start ffmpeg: %s", e)

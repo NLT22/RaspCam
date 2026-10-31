@@ -37,9 +37,13 @@ def main(argv: list[str] | None = None) -> None:
     housekeeper.run_once()  # reconcile files left by a previous run before ffmpeg starts
     recorder.start()
     housekeeper.start()
+
+    def shutdown() -> None:
+        housekeeper.stop()
+        recorder.stop()  # one SIGTERM, then wait: ffmpeg finishes the current segment
+
     try:
-        uvicorn.run(create_app(cfg, latest, recorder.status, store, segments_dir),
+        uvicorn.run(create_app(cfg, latest, recorder.status, store, segments_dir, shutdown),
                     host=cfg.web.host, port=cfg.web.port, log_level="info")
     finally:
-        housekeeper.stop()
-        recorder.stop()
+        shutdown()  # if uvicorn exited without a lifespan shutdown (e.g. startup error)

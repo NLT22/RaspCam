@@ -75,6 +75,38 @@ def test_stop_terminates_child_quickly(latest):
     assert not rec.running
 
 
+def test_child_runs_in_its_own_session(latest):
+    # Ctrl+C in a terminal must not reach ffmpeg directly (see test below)
+    import os
+    rec = Recorder(py("import os, sys, time\n"
+                      "sys.stderr.write(f'pgid={os.getpgid(0)}\\n'); sys.stderr.flush()\n"
+                      "time.sleep(30)\n"), latest)
+    rec.start()
+    try:
+        assert wait_until(lambda: (rec.status()["last_error"] or "").startswith("pgid="))
+        assert rec.status()["last_error"] != f"pgid={os.getpgid(0)}"
+    finally:
+        rec.stop()
+
+
+def test_stop_signals_child_exactly_once(latest):
+    # ffmpeg 7 aborts without writing the MP4 trailer on a second SIGTERM
+    rec = Recorder(py("import signal, sys, time\n"
+                      "n = 0\n"
+                      "def on_term(*_):\n"
+                      "    global n\n"
+                      "    n += 1\n"
+                      "    sys.stderr.write(f'term{n}\\n'); sys.stderr.flush()\n"
+                      "signal.signal(signal.SIGTERM, on_term)\n"
+                      "sys.stderr.write('ready\\n'); sys.stderr.flush()\n"
+                      "while n == 0: time.sleep(0.01)\n"
+                      "time.sleep(0.5)\n"), latest)
+    rec.start()
+    assert wait_until(lambda: rec.status()["last_error"] == "ready")
+    rec.stop()
+    assert rec.status()["last_error"] == "term1"
+
+
 def small_cfg():
     return parse_config({
         "camera": {"device": "testsrc", "width": 320, "height": 180, "input_fps": 10},

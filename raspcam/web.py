@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import secrets
 import shutil
 from pathlib import Path
@@ -40,8 +41,17 @@ async def mjpeg_stream(latest: LatestFrame, fps: int,
 
 
 def create_app(cfg: Config, latest: LatestFrame, recorder_status: Callable[[], dict],
-               store: SegmentStore, segments_dir: Path) -> FastAPI:
-    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+               store: SegmentStore, segments_dir: Path,
+               on_shutdown: Callable[[], None] | None = None) -> FastAPI:
+    @contextlib.asynccontextmanager
+    async def lifespan(app: FastAPI):
+        yield
+        # uvicorn re-raises SIGTERM after shutdown, so cleanup after uvicorn.run()
+        # would never run under systemd; do it here, while we still can
+        if on_shutdown:
+            await asyncio.to_thread(on_shutdown)
+
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.add_middleware(SessionMiddleware,
                        secret_key=cfg.web.secret_key or secrets.token_hex(32),
                        same_site="lax", max_age=30 * 24 * 3600)

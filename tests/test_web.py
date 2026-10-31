@@ -152,3 +152,14 @@ def test_recordings_page_renders(client):
     login(client)
     r = client.get("/recordings")
     assert r.status_code == 200 and "Xem lại" in r.text and "<video" in r.text
+
+
+def test_on_shutdown_runs_when_the_app_stops(latest, store, seg_dir):
+    # uvicorn re-raises SIGTERM after shutdown, so code after uvicorn.run()
+    # never runs under systemd; cleanup must happen in the lifespan instead
+    cfg = parse_config({"camera": {"device": "testsrc"}, "web": {"password_hash": "scrypt$x"}})
+    calls = []
+    app = create_app(cfg, latest, lambda: STATUS, store, seg_dir, on_shutdown=lambda: calls.append(1))
+    with TestClient(app):
+        assert calls == []
+    assert calls == [1]
