@@ -1,0 +1,16 @@
+[Unit]
+Description=RaspCam security camera
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=nlt22
+Group=nlt22
+SupplementaryGroups=video
+WorkingDirectory=/home/nlt22/raspcam
+ExecStart=/home/nlt22/raspcam/.venv/bin/python -m raspcam --config /home/nlt22/raspcam/config.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

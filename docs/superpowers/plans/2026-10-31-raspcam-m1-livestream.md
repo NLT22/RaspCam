@@ -379,7 +379,7 @@ def build_command(cfg: Config) -> list[str]:
     """ffmpeg argv that writes the live MJPEG stream to stdout."""
     live = cfg.live
     return [
-        "ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin",
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
         *_input_args(cfg),
         "-vf", f"fps={live.fps},scale={live.width}:{live.height}",
         "-c:v", "mjpeg", "-q:v", str(live.quality),
