@@ -132,6 +132,8 @@ button svg, .button svg { width: 18px; height: 18px; fill: currentColor; flex: n
   pointer-events: none;
 }
 .osd-live { display: inline-flex; align-items: center; gap: 6px; }
+.osd-motion { background: var(--amber); color: var(--on-amber); text-shadow: none;
+  font-size: .75em; padding: 2px 8px; border-radius: 4px; }
 .rec-dot { width: .6em; height: .6em; border-radius: 50%; background: var(--rec); animation: blink 1.6s steps(2, start) infinite; }
 @keyframes blink { to { visibility: hidden; } }
 .screen-msg {
@@ -191,9 +193,11 @@ button svg, .button svg { width: 18px; height: 18px; fill: currentColor; flex: n
 .range { position: absolute; top: 0; bottom: 0; background: var(--track); }
 .playhead {
   position: absolute; top: -5px; bottom: -5px; width: 3px; margin-left: -1.5px;
-  background: var(--amber); border-radius: 2px; pointer-events: none;
+  background: var(--ink); border-radius: 2px; pointer-events: none;
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--bg) 70%, transparent);
 }
+.event { position: absolute; top: 0; bottom: 0; min-width: 3px; background: var(--amber); }
+.track-day .event { top: -3px; bottom: -3px; border-radius: 1px; }
 .ticks { position: relative; height: 18px; margin-top: 4px; color: var(--muted); font-size: 12px; }
 .ticks span { position: absolute; transform: translateX(-50%); }
 .ticks span:first-child { transform: none; }
@@ -222,6 +226,20 @@ button svg, .button svg { width: 18px; height: 18px; fill: currentColor; flex: n
 .thumb[aria-current="true"] { color: var(--ink); font-weight: 600; }
 .thumb:disabled { opacity: 1; cursor: default; }
 .thumb span { display: block; padding-top: 2px; }
+
+.events { margin-top: 26px; }
+.events-nav { display: flex; gap: 6px; }
+.events-nav button { min-height: 34px; padding: 5px 10px; }
+.event-list { list-style: none; margin: 8px 0 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px 10px; }
+.event-item { display: block; width: 100%; padding: 0; border: 0; min-height: 0; text-align: left; }
+.event-item img, .event-item .blank { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover;
+  border-radius: 6px; background: var(--track-empty); outline: 2px solid transparent; outline-offset: -2px; }
+.event-item:hover img { outline-color: var(--muted); }
+.event-item[aria-current="true"] img { outline-color: var(--amber); }
+.event-item strong { display: block; margin-top: 4px; font-size: 14px; }
+.event-item span { color: var(--muted); font-size: 13px; }
+.events-empty { color: var(--muted); margin: 8px 0 0; }
 
 .hint { color: var(--muted); font-size: 13px; margin: 18px 2px 0; }
 kbd {

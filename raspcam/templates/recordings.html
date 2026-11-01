@@ -57,7 +57,19 @@
       <div class="thumbs" id="thumbs"></div>
     </section>
 
-    <p class="hint">Phím tắt: <kbd>Space</kbd> phát hoặc dừng, <kbd>←</kbd> <kbd>→</kbd> lùi hoặc tới 10 giây, giữ <kbd>Shift</kbd> để nhảy 1 phút.</p>
+    <section class="events" id="events" aria-label="Chuyển động" hidden>
+      <div class="track-head">
+        <h2 id="events-title">Chuyển động</h2>
+        <div class="events-nav">
+          <button id="prev-event"><svg viewBox="0 0 24 24"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z"/></svg>Lần trước</button>
+          <button id="next-event">Lần sau<svg viewBox="0 0 24 24"><path d="M8.6 16.6 10 18l6-6-6-6-1.4 1.4 4.6 4.6z"/></svg></button>
+        </div>
+      </div>
+      <p class="events-empty" id="events-empty" hidden>Không phát hiện chuyển động nào trong ngày này.</p>
+      <ol class="event-list" id="event-list"></ol>
+    </section>
+
+    <p class="hint">Phím tắt: <kbd>Space</kbd> phát hoặc dừng, <kbd>←</kbd> <kbd>→</kbd> lùi hoặc tới 10 giây, giữ <kbd>Shift</kbd> để nhảy 1 phút, <kbd>,</kbd> <kbd>.</kbd> tới lần chuyển động trước hoặc sau.</p>
   </div>
 </main>
 <script src="/static/recordings.js"></script>

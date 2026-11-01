@@ -1,6 +1,6 @@
 "use strict";
 // Recordings page: plays 1-minute segments as one continuous day, with a
-// 24 h track, a 1 h zoom track, and 5-minute thumbnails.
+// 24 h track, a 1 h zoom track, 5-minute thumbnails, and motion events.
 //
 // Two <video> elements take turns: one plays while the other preloads the
 // next segment, so playback crosses segment boundaries without a pause.
@@ -17,6 +17,8 @@ const st = {
   dayStart: 0,     // epoch seconds of local midnight
   segs: [],        // {name, start, end, duration, size}, oldest first
   ranges: [],      // merged recorded spans [{start, end}]
+  events: [],      // motion events {id, start, end (null while going), peak}, oldest first
+  motionEnabled: false,
   cur: -1,         // index of the segment on the front player
   rate: 1,
   wantPlay: false,
@@ -87,23 +89,33 @@ function now() {
 async function loadDay(day, startAt) {
   st.day = day;
   st.dayStart = midnight(day);
-  st.segs = await api("/api/segments?day=" + encodeURIComponent(day));
+  const q = "?day=" + encodeURIComponent(day);
+  [st.segs, st.events] = await Promise.all([api("/api/segments" + q), api("/api/events" + q)]);
   st.ranges = mergeRanges(st.segs);
   st.cur = -1;
   st.hour = -1;
   back.removeAttribute("src");
   back.dataset.name = "";
   drawDay();
+  drawEventList();
   if (!st.segs.length) { render(); return; }
   const last = st.segs[st.segs.length - 1];
   seekTo(startAt ?? Math.max(st.segs[0].start, last.end - 300), {quiet: true});
 }
 
-// Pick up segments recorded since the page loaded (or removed by retention).
+// Pick up segments and events recorded since the page loaded (or removed by retention).
 async function refreshDay() {
   if (!st.day) return;
   const curName = st.cur >= 0 ? st.segs[st.cur].name : null;
-  const segs = await api("/api/segments?day=" + encodeURIComponent(st.day));
+  const q = "?day=" + encodeURIComponent(st.day);
+  const [segs, events] = await Promise.all([api("/api/segments" + q), api("/api/events" + q)]);
+  if (JSON.stringify(events) !== JSON.stringify(st.events)) {
+    st.events = events;
+    drawEventList();
+    drawDay();
+    st.hour = -1;  // redraw the hour track's markers on the next render
+    render();
+  }
   if (segs.length === st.segs.length && segs.at(-1)?.name === st.segs.at(-1)?.name) return;
   st.segs = segs;
   st.ranges = mergeRanges(segs);
@@ -216,20 +228,29 @@ function setRate(r) {
 // ---------- drawing ----------
 const pct = (t, from, span) => `${clamp((t - from) / span, 0, 1) * 100}%`;
 
-function drawRanges(track, from, span) {
-  track.querySelectorAll(".range").forEach(el => el.remove());
-  for (const r of st.ranges) {
-    if (r.end <= from || r.start >= from + span) continue;
-    const el = document.createElement("div");
-    el.className = "range";
-    el.style.left = pct(r.start, from, span);
-    el.style.width = `calc(${pct(r.end, from, span)} - ${pct(r.start, from, span)})`;
-    track.prepend(el);
+function span(cls, start, end, from, length) {
+  const el = document.createElement("div");
+  el.className = cls;
+  el.style.left = pct(start, from, length);
+  el.style.width = `calc(${pct(end, from, length)} - ${pct(start, from, length)})`;
+  return el;
+}
+
+// Recorded ranges underneath, motion events on top, playhead above both.
+function drawSpans(track, from, length) {
+  track.querySelectorAll(".range, .event").forEach(el => el.remove());
+  let playhead = track.querySelector(".playhead");
+  if (!playhead) {
+    playhead = Object.assign(document.createElement("div"), {className: "playhead"});
+    track.append(playhead);
   }
-  if (!track.querySelector(".playhead")) {
-    const ph = document.createElement("div");
-    ph.className = "playhead";
-    track.append(ph);
+  for (const r of st.ranges) {
+    if (r.end > from && r.start < from + length) track.prepend(span("range", r.start, r.end, from, length));
+  }
+  const nowTs = Date.now() / 1000;
+  for (const e of st.events) {
+    const end = e.end ?? nowTs;
+    if (end > from && e.start < from + length) track.insertBefore(span("event", e.start, end, from, length), playhead);
   }
 }
 
@@ -242,14 +263,14 @@ function drawDay() {
   $("day-summary").textContent = st.segs.length
     ? `Đã ghi ${Math.floor(recorded / HOUR)} giờ ${pad(Math.round(recorded % HOUR / 60))} phút, từ ${hm(st.segs[0].start)} đến ${hm(st.segs.at(-1).end)}`
     : "Không có bản ghi trong ngày này";
-  drawRanges($("day-track"), st.dayStart, DAY);
+  drawSpans($("day-track"), st.dayStart, DAY);
 }
 
 function drawHour(hour) {
   st.hour = hour;
   const from = st.dayStart + hour * HOUR;
   $("hour-title").textContent = `${pad(hour)}:00 – ${pad((hour + 1) % 24)}:00`;
-  drawRanges($("hour-track"), from, HOUR);
+  drawSpans($("hour-track"), from, HOUR);
   const box = $("thumbs");
   box.textContent = "";
   for (let k = 0; k < 12; k++) {
@@ -279,6 +300,46 @@ function drawHour(hour) {
   }
 }
 
+function eventDuration(e) {
+  if (e.end === null) return "đang diễn ra";
+  const secs = Math.max(1, Math.round(e.end - e.start));
+  return secs < 60 ? `${secs} giây` : `${Math.floor(secs / 60)} phút ${secs % 60} giây`;
+}
+
+function drawEventList() {
+  const box = $("event-list");
+  box.textContent = "";
+  $("events").hidden = !st.motionEnabled && !st.events.length;
+  $("events-empty").hidden = st.events.length > 0;
+  $("events-title").textContent = st.events.length ? `Chuyển động (${st.events.length} lần)` : "Chuyển động";
+  for (const e of [...st.events].reverse()) {          // newest first
+    const b = document.createElement("button");
+    b.className = "event-item";
+    b.dataset.start = e.start;
+    b.dataset.end = e.end ?? Infinity;
+    const img = new Image();
+    img.loading = "lazy";
+    img.alt = "";
+    img.src = `/events/${e.id}.jpg`;
+    img.onerror = () => img.replaceWith(Object.assign(document.createElement("i"), {className: "blank"}));
+    b.append(img,
+      Object.assign(document.createElement("strong"), {textContent: hms(e.start)}),
+      Object.assign(document.createElement("span"), {textContent: eventDuration(e)}));
+    b.onclick = () => seekTo(e.start - 3);
+    const li = document.createElement("li");
+    li.append(b);
+    box.append(li);
+  }
+}
+
+function jumpEvent(dir) {
+  const t = now();
+  const e = dir < 0 ? [...st.events].reverse().find(e => e.start < t - 1)
+                    : st.events.find(e => e.start - 3 > t + 1);
+  if (e) seekTo(e.start - 3);
+  else toast(dir < 0 ? "Không có chuyển động nào trước đó trong ngày." : "Không có chuyển động nào sau đó trong ngày.");
+}
+
 // Keep the position in the URL so a reload or a shared link opens the same moment.
 let lastHashUpdate = 0;
 function saveHash() {
@@ -302,6 +363,8 @@ function render() {
   for (const track of [$("day-track"), $("hour-track")]) track.setAttribute("aria-valuetext", hms(t));
   document.querySelectorAll(".thumb").forEach(b =>
     b.setAttribute("aria-current", String(t >= +b.dataset.from && t < +b.dataset.to)));
+  document.querySelectorAll(".event-item").forEach(b =>
+    b.setAttribute("aria-current", String(t >= +b.dataset.start - 3 && t <= +b.dataset.end + 3)));
 
   const dl = $("download");
   if (st.cur >= 0) {
@@ -365,6 +428,8 @@ attachTrack($("hour-track"), () => [st.dayStart + st.hour * HOUR, HOUR]);
 $("play").addEventListener("click", togglePlay);
 document.querySelectorAll("[data-seek]").forEach(b => b.addEventListener("click", () => seekTo(now() + +b.dataset.seek)));
 document.querySelectorAll("[data-rate]").forEach(b => b.addEventListener("click", () => setRate(+b.dataset.rate)));
+$("prev-event").addEventListener("click", () => jumpEvent(-1));
+$("next-event").addEventListener("click", () => jumpEvent(1));
 $("prev-day").addEventListener("click", () => {
   const i = st.days.indexOf(st.day);
   if (i < st.days.length - 1) loadDay(st.days[i + 1], null);
@@ -376,6 +441,8 @@ $("next-day").addEventListener("click", () => {
 document.addEventListener("keydown", e => {
   if (e.target.closest("input, select, textarea") || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === " " && !e.target.closest("button, a")) { e.preventDefault(); togglePlay(); }
+  else if (e.key === ",") jumpEvent(-1);
+  else if (e.key === ".") jumpEvent(1);
   else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
     e.preventDefault();
     const step = (e.shiftKey ? 60 : 10) * (e.key === "ArrowLeft" ? -1 : 1);
@@ -385,7 +452,9 @@ document.addEventListener("keydown", e => {
 
 // ---------- start ----------
 (async function init() {
-  st.days = await api("/api/days");
+  const [days, status] = await Promise.all([api("/api/days"), api("/api/status")]);
+  st.days = days;
+  st.motionEnabled = status.motion?.enabled ?? false;
   if (!st.days.length) { $("empty").hidden = false; return; }
   $("player-ui").hidden = false;
   front.hidden = false;

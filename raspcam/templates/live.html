@@ -5,7 +5,7 @@
 <main class="page">
   <div class="screen">
     <img id="live" src="/live.mjpg" alt="Hình trực tiếp từ camera">
-    <div class="osd"><span class="osd-live"><i class="rec-dot" aria-hidden="true"></i>Trực tiếp</span><time id="clock"></time></div>
+    <div class="osd"><span class="osd-live"><i class="rec-dot" aria-hidden="true"></i>Trực tiếp</span><time id="clock"></time><span class="osd-motion" id="motion-badge" hidden>Có chuyển động</span></div>
     <div class="screen-msg" id="offline" hidden>
       <strong>Camera mất tín hiệu</strong>
       <span id="offline-detail">Đang thử kết nối lại. Kiểm tra dây USB của webcam nếu tình trạng kéo dài.</span>
@@ -14,6 +14,7 @@
   <dl class="facts">
     <div><dt>Camera</dt><dd id="f-camera">Đang kết nối…</dd></div>
     <div><dt>Bản ghi đã lưu</dt><dd id="f-used">–</dd><div class="meter"><i id="f-meter" style="width:0"></i></div></div>
+    <div><dt>Chuyển động hôm nay</dt><dd id="f-motion">–</dd></div>
     <div><dt>Ổ còn trống</dt><dd id="f-free">–</dd></div>
   </dl>
 </main>
@@ -37,6 +38,9 @@
       cam.className = s.camera_online ? "state-ok" : "state-bad";
       $("offline").hidden = s.camera_online;
       if (!s.camera_online && s.last_error) $("offline-detail").textContent = `Lỗi gần nhất: ${s.last_error}`;
+      const mo = s.motion || {enabled: false};
+      $("motion-badge").hidden = !(mo.enabled && mo.active);
+      $("f-motion").textContent = mo.enabled ? `${mo.events_today} lần` : "Đang tắt";
       const st = s.storage;
       $("f-used").textContent = `${gb(st.used_bytes)} / ${gb(st.quota_bytes)} GB`;
       $("f-meter").style.width = Math.min(100, st.used_bytes / st.quota_bytes * 100) + "%";
@@ -50,6 +54,6 @@
     }
   }
   tick(); setInterval(tick, 1000);
-  refresh(); setInterval(refresh, 3000);
+  refresh(); setInterval(refresh, 2000);
 </script>
 {% endblock %}
