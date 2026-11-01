@@ -43,7 +43,7 @@ def test_invalid_numbers_are_errors(section, key, value):
 
 
 def test_unknown_top_level_sections_are_ignored():
-    cfg = parse_config({**MINIMAL, "motion": {"fps": 5}})
+    cfg = parse_config({**MINIMAL, "notifications": {"telegram": "x"}})
     assert cfg.camera.device == "testsrc"
 
 
@@ -88,3 +88,25 @@ def test_keyframe_interval_must_fit_in_segment():
 
 def test_float_quota_is_accepted():
     assert parse_config({**MINIMAL, "storage": {"quota_gb": 0.5}}).storage.quota_gb == 0.5
+
+
+def test_motion_defaults_and_mode():
+    cfg = parse_config(MINIMAL)
+    m = cfg.motion
+    assert cfg.recording.mode == "both"
+    assert (m.width, m.height, m.fps, m.pixel_threshold) == (320, 180, 5, 25)
+    assert (m.area_percent, m.min_frames, m.cooldown_seconds, m.padding_segments) == (1.0, 2, 10.0, 1)
+
+
+def test_unknown_mode_is_an_error():
+    with pytest.raises(ConfigError, match="mode"):
+        parse_config({**MINIMAL, "recording": {"mode": "sometimes"}})
+
+
+@pytest.mark.parametrize("key,value", [
+    ("fps", 0), ("min_frames", 0), ("pixel_threshold", 0), ("pixel_threshold", 255),
+    ("area_percent", 0), ("area_percent", 101), ("cooldown_seconds", 0), ("padding_segments", -1),
+])
+def test_invalid_motion_values(key, value):
+    with pytest.raises(ConfigError, match=key):
+        parse_config({**MINIMAL, "motion": {key: value}})

@@ -23,6 +23,7 @@ web:
   secret_key: ""
 
 recording:
+  mode: both              # continuous | motion | both
   fps: 10
   crf: 28                 # lower = better quality, bigger files (30 ≈ half the size)
   preset: veryfast        # ~1.3 cores on the Pi 5; ultrafast ≈ 0.5 core but much worse quality per MB
@@ -33,3 +34,10 @@ storage:
   path: ~/raspcam-data    # segments/ and raspcam.db live here
   quota_gb: 5             # oldest segments are deleted beyond this
   min_free_gb: 1          # ...or when the disk has less free space than this
+
+motion:
+  pixel_threshold: 25     # how much a pixel must change (0-255) to count
+  area_percent: 1.0       # % of the picture that must change; raise if you get false alarms
+  min_frames: 2           # consecutive frames with motion before an event starts
+  cooldown_seconds: 10    # an event ends after this long without motion
+  padding_segments: 1     # motion mode: minutes kept before/after each event

@@ -11,6 +11,9 @@ class ConfigError(ValueError):
     pass
 
 
+MODES = ("continuous", "motion", "both")
+
+
 @dataclass(frozen=True)
 class CameraConfig:
     device: str
@@ -39,6 +42,7 @@ class WebConfig:
 
 @dataclass(frozen=True)
 class RecordingConfig:
+    mode: str = "both"       # continuous | motion | both
     fps: int = 10
     crf: int = 28            # x264 quality: lower is better and bigger
     preset: str = "veryfast"
@@ -54,12 +58,25 @@ class StorageConfig:
 
 
 @dataclass(frozen=True)
+class MotionConfig:
+    width: int = 320
+    height: int = 180
+    fps: int = 5
+    pixel_threshold: int = 25       # per-pixel change (0-255) that counts as "changed"
+    area_percent: float = 1.0       # % of changed pixels for a frame to count as motion
+    min_frames: int = 2             # consecutive motion frames to start an event
+    cooldown_seconds: float = 10.0  # this long without motion ends the event
+    padding_segments: int = 1       # motion mode: segments kept before/after each event
+
+
+@dataclass(frozen=True)
 class Config:
     camera: CameraConfig
     live: LiveConfig
     web: WebConfig
     recording: RecordingConfig
     storage: StorageConfig
+    motion: MotionConfig
 
 
 def _section(cls, data, name):
@@ -100,6 +117,7 @@ def parse_config(data: dict) -> Config:
         web=_section(WebConfig, data.get("web"), "web"),
         recording=_section(RecordingConfig, data.get("recording"), "recording"),
         storage=_section(StorageConfig, data.get("storage"), "storage"),
+        motion=_section(MotionConfig, data.get("motion"), "motion"),
     )
     for name in ("width", "height", "input_fps"):
         _positive_int(f"camera.{name}", getattr(cfg.camera, name))
@@ -116,6 +134,19 @@ def parse_config(data: dict) -> Config:
         raise ConfigError("recording.keyframe_seconds must not exceed recording.segment_seconds")
     _number("storage.quota_gb", cfg.storage.quota_gb, minimum=0, inclusive=False)
     _number("storage.min_free_gb", cfg.storage.min_free_gb, minimum=0, inclusive=True)
+    if cfg.recording.mode not in MODES:
+        raise ConfigError(f"recording.mode must be one of {', '.join(MODES)}, got {cfg.recording.mode!r}")
+    for name in ("width", "height", "fps", "min_frames"):
+        _positive_int(f"motion.{name}", getattr(cfg.motion, name))
+    m = cfg.motion
+    if not isinstance(m.pixel_threshold, int) or not 1 <= m.pixel_threshold <= 254:
+        raise ConfigError(f"motion.pixel_threshold must be 1..254, got {m.pixel_threshold!r}")
+    _number("motion.area_percent", m.area_percent, minimum=0, inclusive=False)
+    if m.area_percent > 100:
+        raise ConfigError(f"motion.area_percent must be at most 100, got {m.area_percent!r}")
+    _number("motion.cooldown_seconds", m.cooldown_seconds, minimum=0, inclusive=False)
+    if not isinstance(m.padding_segments, int) or isinstance(m.padding_segments, bool) or m.padding_segments < 0:
+        raise ConfigError(f"motion.padding_segments must be an integer >= 0, got {m.padding_segments!r}")
     if not cfg.web.password_hash:
         raise ConfigError("web.password_hash is empty; generate one with: python -m raspcam.auth")
     return cfg
