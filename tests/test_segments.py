@@ -66,3 +66,58 @@ def test_other_files_are_ignored(tmp_path):
     touch(d, "readme.txt")
     assert idx.scan(writing=False) == []
     assert (d / "readme.txt").exists()
+
+
+def make_with_thumbs(tmp_path, budget=30):
+    d = tmp_path / "segments"
+    d.mkdir()
+    thumbs = tmp_path / "thumbs"
+    thumbs.mkdir()
+    store = SegmentStore(tmp_path / "db.sqlite")
+    made = []
+
+    def fake_thumb(src, dst):
+        made.append(src.name)
+        dst.write_bytes(b"jpg")
+        return True
+
+    idx = Indexer(store, d, probe=lambda p: 60.0, thumbs_dir=thumbs, make_thumb=fake_thumb,
+                  thumb_budget=budget)
+    return d, thumbs, store, idx, made
+
+
+def test_thumb_name():
+    from raspcam.segments import thumb_name
+    assert thumb_name("20261101-100000.mp4") == "20261101-100000.jpg"
+
+
+def test_new_segments_get_thumbnails(tmp_path):
+    d, thumbs, store, idx, made = make_with_thumbs(tmp_path)
+    touch(d, "20261101-100000.mp4")
+    idx.scan(writing=False)
+    assert made == ["20261101-100000.mp4"]
+    assert (thumbs / "20261101-100000.jpg").exists()
+    idx.scan(writing=False)
+    assert made == ["20261101-100000.mp4"]  # not regenerated
+
+
+def test_missing_thumbnails_are_backfilled_newest_first_within_budget(tmp_path):
+    d, thumbs, store, idx, made = make_with_thumbs(tmp_path, budget=2)
+    from raspcam.db import Segment
+    for m in range(4):
+        name = f"20261101-10{m:02d}00.mp4"
+        touch(d, name)
+        store.add(Segment(name, m, m + 60, 10))  # indexed before thumbnails existed
+    idx.scan(writing=False)
+    assert made == ["20261101-100300.mp4", "20261101-100200.mp4"]
+    idx.scan(writing=False)
+    assert made[2:] == ["20261101-100100.mp4", "20261101-100000.mp4"]
+
+
+def test_thumbnail_is_removed_with_missing_segment(tmp_path):
+    d, thumbs, store, idx, made = make_with_thumbs(tmp_path)
+    p = touch(d, "20261101-100000.mp4")
+    idx.scan(writing=False)
+    p.unlink()
+    idx.scan(writing=False)
+    assert not (thumbs / "20261101-100000.jpg").exists()

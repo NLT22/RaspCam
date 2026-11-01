@@ -39,15 +39,40 @@ def probe_duration(path: Path) -> float | None:
     return duration if r.returncode == 0 and duration > 0 else None
 
 
+def thumb_name(segment_name: str) -> str:
+    return segment_name.removesuffix(".mp4") + ".jpg"
+
+
+def extract_thumbnail(src: Path, dst: Path, width: int = 320) -> bool:
+    """Save the first frame of src as a small JPEG at dst."""
+    tmp = dst.with_name(dst.stem + ".tmp.jpg")  # never serve a half-written file
+    r = subprocess.run(
+        ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", str(src), "-frames:v", "1",
+         "-vf", f"scale={width}:-2", "-q:v", "5", str(tmp)],
+        capture_output=True, timeout=30)
+    if r.returncode != 0 or not tmp.exists():
+        tmp.unlink(missing_ok=True)
+        return False
+    tmp.replace(dst)
+    return True
+
+
 class Indexer:
     def __init__(self, store: SegmentStore, directory: Path, *,
                  probe: Callable[[Path], float | None] = probe_duration,
-                 settle_seconds: float = 5.0, clock: Callable[[], float] = time.time):
+                 settle_seconds: float = 5.0, clock: Callable[[], float] = time.time,
+                 thumbs_dir: Path | None = None,
+                 make_thumb: Callable[[Path, Path], bool] = extract_thumbnail,
+                 thumb_budget: int = 30):
         self._store = store
         self._dir = directory
         self._probe = probe
         self._settle = settle_seconds
         self._clock = clock
+        self._thumbs = thumbs_dir
+        self._make_thumb = make_thumb
+        self._thumb_budget = thumb_budget  # max thumbnails made per scan
+        self._thumb_checked: set[str] = set()
 
     def scan(self, writing: bool) -> list[str]:
         """Make the store match the directory; return names newly indexed.
@@ -61,6 +86,9 @@ class Indexer:
         known = self._store.names()
         for name in known - on_disk:
             self._store.remove(name)
+            if self._thumbs:
+                (self._thumbs / thumb_name(name)).unlink(missing_ok=True)
+                self._thumb_checked.discard(name)
         if writing and files:
             files = files[:-1]
         now = self._clock()
@@ -79,4 +107,20 @@ class Indexer:
             start = parse_start(p.name)
             self._store.add(Segment(p.name, start, start + duration, stat.st_size))
             added.append(p.name)
+        if self._thumbs:
+            self._fill_thumbnails()
         return added
+
+    def _fill_thumbnails(self) -> None:
+        """Make missing thumbnails, newest first, at most thumb_budget per scan
+        so a backlog (e.g. after an upgrade) does not stall housekeeping."""
+        budget = self._thumb_budget
+        for name in sorted(self._store.names() - self._thumb_checked, reverse=True):
+            dst = self._thumbs / thumb_name(name)
+            if not dst.exists():
+                if budget == 0:
+                    break
+                budget -= 1
+                if not self._make_thumb(self._dir / name, dst):
+                    log.warning("could not make thumbnail for %s", name)
+            self._thumb_checked.add(name)  # failures are not retried every scan

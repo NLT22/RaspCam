@@ -9,7 +9,7 @@ from typing import Callable
 
 from .config import StorageConfig
 from .db import Segment, SegmentStore
-from .segments import Indexer
+from .segments import Indexer, thumb_name
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +36,8 @@ class Housekeeper:
     def __init__(self, store: SegmentStore, indexer: Indexer, directory: Path,
                  storage: StorageConfig, writing: Callable[[], bool], *,
                  interval: float = 10.0,
-                 disk_free: Callable[[Path], int] = lambda p: shutil.disk_usage(p).free):
+                 disk_free: Callable[[Path], int] = lambda p: shutil.disk_usage(p).free,
+                 thumbs_dir: Path | None = None):
         self._store = store
         self._indexer = indexer
         self._dir = directory
@@ -44,6 +45,7 @@ class Housekeeper:
         self._writing = writing
         self._interval = interval
         self._disk_free = disk_free
+        self._thumbs = thumbs_dir
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -55,6 +57,8 @@ class Housekeeper:
                                 int(self._storage.min_free_gb * GB))
         for name in doomed:
             (self._dir / name).unlink(missing_ok=True)
+            if self._thumbs:
+                (self._thumbs / thumb_name(name)).unlink(missing_ok=True)
             self._store.remove(name)
         if doomed:
             log.info("retention deleted %d segment(s), oldest %s", len(doomed), doomed[0])

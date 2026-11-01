@@ -26,7 +26,9 @@ cp config.example.yaml config.yaml
 Recordings go to `storage.path` (default `~/raspcam-data`): one MP4 per
 minute in `segments/`, indexed in `raspcam.db`. The oldest segments are deleted
 when they exceed `storage.quota_gb` or the disk has less than
-`storage.min_free_gb` free. Play them back on the "Xem lại" page (`/recordings`).
+`storage.min_free_gb` free. Play them back on the "Xem lại" page (`/recordings`):
+a day timeline, an hour view with 5-minute thumbnails (`thumbs/`), playback
+speed up to 16x, keyboard shortcuts, and a download button per segment.
 
 ## Deploy to the Pi
 

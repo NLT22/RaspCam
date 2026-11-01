@@ -5,11 +5,13 @@ import asyncio
 import contextlib
 import secrets
 import shutil
+import time
 from pathlib import Path
 from typing import AsyncIterator, Awaitable, Callable
 
 from fastapi import FastAPI, Form, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -18,9 +20,10 @@ from .config import Config
 from .db import SegmentStore
 from .frames import LatestFrame
 from .retention import GB
-from .segments import parse_start
+from .segments import parse_start, thumb_name
 
-TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+HERE = Path(__file__).parent
+TEMPLATES = Jinja2Templates(directory=str(HERE / "templates"))
 OFFLINE_AFTER = 5.0  # seconds without a frame before the camera counts as offline
 BOUNDARY = "frame"
 
@@ -41,7 +44,8 @@ async def mjpeg_stream(latest: LatestFrame, fps: int,
 
 
 def create_app(cfg: Config, latest: LatestFrame, recorder_status: Callable[[], dict],
-               store: SegmentStore, segments_dir: Path,
+               store: SegmentStore, segments_dir: Path, *,
+               thumbs_dir: Path | None = None,
                on_shutdown: Callable[[], None] | None = None) -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -52,6 +56,7 @@ def create_app(cfg: Config, latest: LatestFrame, recorder_status: Callable[[], d
             await asyncio.to_thread(on_shutdown)
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")  # CSS, JS, fonts
     app.add_middleware(SessionMiddleware,
                        secret_key=cfg.web.secret_key or secrets.token_hex(32),
                        same_site="lax", max_age=30 * 24 * 3600)
@@ -122,15 +127,32 @@ def create_app(cfg: Config, latest: LatestFrame, recorder_status: Callable[[], d
                  "duration": s.duration, "size": s.size} for s in store.by_day(day)]
 
     @app.get("/media/{name}")
-    def media(request: Request, name: str):
+    def media(request: Request, name: str, download: bool = False):
         if not logged_in(request):
             return Response(status_code=401)
         # parse_start only accepts YYYYMMDD-HHMMSS.mp4, so no path tricks get through
-        if parse_start(name) is None or store.get(name) is None:
+        start = parse_start(name)
+        if start is None or store.get(name) is None:
             return Response(status_code=404)
         path = segments_dir / name
         if not path.is_file():
             return Response(status_code=404)
+        if download:
+            stamp = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(start))
+            return FileResponse(path, media_type="video/mp4", filename=f"raspcam-{stamp}.mp4")
         return FileResponse(path, media_type="video/mp4")
+
+    @app.get("/thumbs/{name}")
+    def thumb(request: Request, name: str):
+        if not logged_in(request):
+            return Response(status_code=401)
+        segment = name.removesuffix(".jpg") + ".mp4"
+        if not name.endswith(".jpg") or parse_start(segment) is None or thumbs_dir is None:
+            return Response(status_code=404)
+        path = thumbs_dir / thumb_name(segment)
+        if not path.is_file():
+            return Response(status_code=404)
+        return FileResponse(path, media_type="image/jpeg",
+                            headers={"Cache-Control": "private, max-age=86400"})
 
     return app

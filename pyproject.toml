@@ -23,7 +23,7 @@ dev = ["pytest>=8", "httpx>=0.27"]
 include = ["raspcam*"]
 
 [tool.setuptools.package-data]
-raspcam = ["templates/*.html"]
+raspcam = ["templates/*.html", "static/*", "static/fonts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

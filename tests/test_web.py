@@ -31,12 +31,19 @@ def seg_dir(tmp_path):
 
 
 @pytest.fixture
-def client(latest, store, seg_dir):
+def thumbs_dir(tmp_path):
+    d = tmp_path / "thumbs"
+    d.mkdir()
+    return d
+
+
+@pytest.fixture
+def client(latest, store, seg_dir, thumbs_dir):
     cfg = parse_config({
         "camera": {"device": "testsrc"},
         "web": {"password_hash": hash_password("secret"), "secret_key": "k" * 32},
     })
-    return TestClient(create_app(cfg, latest, lambda: STATUS, store, seg_dir))
+    return TestClient(create_app(cfg, latest, lambda: STATUS, store, seg_dir, thumbs_dir=thumbs_dir))
 
 
 def login(client, password="secret"):
@@ -163,3 +170,36 @@ def test_on_shutdown_runs_when_the_app_stops(latest, store, seg_dir):
     with TestClient(app):
         assert calls == []
     assert calls == [1]
+
+
+def test_thumbnails_require_login_and_are_served(client, store, seg_dir, thumbs_dir):
+    name = add_segment(store, seg_dir)
+    thumb = name.replace(".mp4", ".jpg")
+    (thumbs_dir / thumb).write_bytes(b"\xff\xd8jpg\xff\xd9")
+    assert client.get(f"/thumbs/{thumb}").status_code == 401
+    login(client)
+    r = client.get(f"/thumbs/{thumb}")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert "max-age" in r.headers["cache-control"]
+
+
+def test_thumbnail_names_are_validated(client, thumbs_dir):
+    login(client)
+    (thumbs_dir / "secret.jpg").write_bytes(b"x")
+    assert client.get("/thumbs/secret.jpg").status_code == 404
+    assert client.get("/thumbs/20261101-100000.jpg").status_code == 404
+
+
+def test_media_download_sets_a_readable_filename(client, store, seg_dir):
+    name = add_segment(store, seg_dir, when="2026-11-01 03:42:00")
+    login(client)
+    r = client.get(f"/media/{name}", params={"download": 1})
+    assert r.status_code == 200
+    assert r.headers["content-disposition"] == 'attachment; filename="raspcam-2026-11-01_03-42-00.mp4"'
+    assert "content-disposition" not in client.get(f"/media/{name}").headers
+
+
+def test_static_files_are_public(client):
+    r = client.get("/static/app.css")
+    assert r.status_code == 200 and "text/css" in r.headers["content-type"]
+    assert client.get("/static/fonts/be-vietnam-pro-vietnamese-400-normal.woff2").status_code == 200

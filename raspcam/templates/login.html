@@ -1,12 +1,13 @@
 {% extends "base.html" %}
+{% block title %}Đăng nhập – RaspCam{% endblock %}
 {% block body %}
-<main style="max-width:360px; margin-top:10vh">
-  <form class="card" method="post" action="/login">
-    <h1 style="margin-top:0">RaspCam</h1>
-    {% if error %}<p style="color:var(--bad)">{{ error }}</p>{% endif %}
-    <label>Tên đăng nhập<input name="username" autocomplete="username" required></label>
+<main class="login">
+  <form method="post" action="/login">
+    <div class="brand"><i class="brand-mark" aria-hidden="true"></i>RaspCam</div>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    <label>Tên đăng nhập<input name="username" autocomplete="username" autocapitalize="none" required autofocus></label>
     <label>Mật khẩu<input name="password" type="password" autocomplete="current-password" required></label>
-    <button type="submit">Đăng nhập</button>
+    <button type="submit" class="primary">Đăng nhập</button>
   </form>
 </main>
 {% endblock %}

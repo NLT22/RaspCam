@@ -27,13 +27,16 @@ def main(argv: list[str] | None = None) -> None:
 
     data_dir = Path(cfg.storage.path).expanduser()
     segments_dir = data_dir / "segments"
+    thumbs_dir = data_dir / "thumbs"
     segments_dir.mkdir(parents=True, exist_ok=True)
+    thumbs_dir.mkdir(exist_ok=True)
     store = SegmentStore(data_dir / "raspcam.db")
 
     latest = LatestFrame()
     recorder = Recorder(build_command(cfg, segments_dir), latest)
-    housekeeper = Housekeeper(store, Indexer(store, segments_dir), segments_dir,
-                              cfg.storage, writing=lambda: recorder.running)
+    housekeeper = Housekeeper(store, Indexer(store, segments_dir, thumbs_dir=thumbs_dir),
+                              segments_dir, cfg.storage, writing=lambda: recorder.running,
+                              thumbs_dir=thumbs_dir)
     housekeeper.run_once()  # reconcile files left by a previous run before ffmpeg starts
     recorder.start()
     housekeeper.start()
@@ -43,7 +46,8 @@ def main(argv: list[str] | None = None) -> None:
         recorder.stop()  # one SIGTERM, then wait: ffmpeg finishes the current segment
 
     try:
-        uvicorn.run(create_app(cfg, latest, recorder.status, store, segments_dir, shutdown),
+        uvicorn.run(create_app(cfg, latest, recorder.status, store, segments_dir,
+                               thumbs_dir=thumbs_dir, on_shutdown=shutdown),
                     host=cfg.web.host, port=cfg.web.port, log_level="info")
     finally:
         shutdown()  # if uvicorn exited without a lifespan shutdown (e.g. startup error)

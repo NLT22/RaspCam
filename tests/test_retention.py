@@ -48,3 +48,19 @@ def test_housekeeper_scans_then_deletes_files_and_rows(tmp_path):
     first, second = segs(GB, GB)
     assert store.names() == {second.name}
     assert not (tmp_path / first.name).exists() and (tmp_path / second.name).exists()
+
+
+def test_housekeeper_deletes_thumbnails_with_segments(tmp_path):
+    store = SegmentStore(tmp_path / "db.sqlite")
+    thumbs = tmp_path / "thumbs"
+    thumbs.mkdir()
+    first, second = segs(GB, GB)
+    for s in (first, second):
+        store.add(s)
+        (tmp_path / s.name).write_bytes(b"x")
+        (thumbs / s.name.replace(".mp4", ".jpg")).write_bytes(b"j")
+    hk = Housekeeper(store, FakeIndexer(), tmp_path, StorageConfig(quota_gb=1.5, min_free_gb=0),
+                     writing=lambda: True, disk_free=lambda p: 100 * GB, thumbs_dir=thumbs)
+    hk.run_once()
+    assert not (thumbs / first.name.replace(".mp4", ".jpg")).exists()
+    assert (thumbs / second.name.replace(".mp4", ".jpg")).exists()

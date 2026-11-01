@@ -141,7 +141,11 @@ def test_real_ffmpeg_writes_indexable_segments(latest, tmp_path):
     finally:
         rec.stop()
     store = SegmentStore(tmp_path / "db.sqlite")
-    added = Indexer(store, seg_dir, settle_seconds=0).scan(writing=False)
+    thumbs = tmp_path / "thumbs"
+    thumbs.mkdir()
+    added = Indexer(store, seg_dir, settle_seconds=0, thumbs_dir=thumbs).scan(writing=False)
     assert len(added) >= 2
+    thumb = (thumbs / added[0].replace(".mp4", ".jpg")).read_bytes()
+    assert thumb.startswith(b"\xff\xd8")  # a real JPEG from ffmpeg
     full = store.oldest_first()[1:-1]  # first/last may be partial
     assert all(0.5 <= s.duration <= 1.5 for s in full)

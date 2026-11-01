@@ -1,38 +1,55 @@
 {% extends "base.html" %}
 {% block body %}
+{% set active = "live" %}
 {% include "nav.html" %}
-<main>
-  <div class="card">
-    <img id="live" src="/live.mjpg" alt="Camera trực tiếp"
-         style="width:100%; height:auto; display:block; border-radius:8px; background:#000; aspect-ratio:16/9">
-    <p id="status" class="muted">Đang kết nối…</p>
+<main class="page">
+  <div class="screen">
+    <img id="live" src="/live.mjpg" alt="Hình trực tiếp từ camera">
+    <div class="osd"><span class="osd-live"><i class="rec-dot" aria-hidden="true"></i>Trực tiếp</span><time id="clock"></time></div>
+    <div class="screen-msg" id="offline" hidden>
+      <strong>Camera mất tín hiệu</strong>
+      <span id="offline-detail">Đang thử kết nối lại. Kiểm tra dây USB của webcam nếu tình trạng kéo dài.</span>
+    </div>
   </div>
+  <dl class="facts">
+    <div><dt>Camera</dt><dd id="f-camera">Đang kết nối…</dd></div>
+    <div><dt>Bản ghi đã lưu</dt><dd id="f-used">–</dd><div class="meter"><i id="f-meter" style="width:0"></i></div></div>
+    <div><dt>Ổ còn trống</dt><dd id="f-free">–</dd></div>
+  </dl>
 </main>
 <script>
-  const statusEl = document.getElementById("status");
-  const img = document.getElementById("live");
+  const $ = id => document.getElementById(id);
+  const pad = n => String(n).padStart(2, "0");
+  const gb = b => (b / 1e9).toLocaleString("vi-VN", {maximumFractionDigits: 1});
+  function tick() {
+    const d = new Date();
+    $("clock").textContent = `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
   let wasDown = false;
   async function refresh() {
     try {
       const r = await fetch("/api/status");
       if (r.status === 401) { location.href = "/login"; return; }
       const s = await r.json();
-      let text = s.camera_online ? "● Camera online" : "● Camera offline";
-      text += ` · ffmpeg khởi động lại: ${s.restarts}`;
-      const gb = b => (b / 1e9).toFixed(1);
-      text += ` · lưu trữ: ${gb(s.storage.used_bytes)}/${gb(s.storage.quota_bytes)} GB (ổ trống ${gb(s.storage.free_bytes)} GB)`;
-      if (!s.camera_online && s.last_error) text += ` · lỗi: ${s.last_error}`;
-      statusEl.textContent = text;
-      statusEl.style.color = s.camera_online ? "var(--ok)" : "var(--bad)";
-      if (s.camera_online && wasDown) img.src = "/live.mjpg?t=" + Date.now();
+      const cam = $("f-camera");
+      cam.textContent = s.camera_online ? "Đang ghi hình" : "Mất tín hiệu";
+      if (s.camera_online && s.restarts > 0) cam.textContent += ` (đã tự khởi động lại ${s.restarts} lần)`;
+      cam.className = s.camera_online ? "state-ok" : "state-bad";
+      $("offline").hidden = s.camera_online;
+      if (!s.camera_online && s.last_error) $("offline-detail").textContent = `Lỗi gần nhất: ${s.last_error}`;
+      const st = s.storage;
+      $("f-used").textContent = `${gb(st.used_bytes)} / ${gb(st.quota_bytes)} GB`;
+      $("f-meter").style.width = Math.min(100, st.used_bytes / st.quota_bytes * 100) + "%";
+      $("f-free").textContent = `${gb(st.free_bytes)} GB`;
+      if (s.camera_online && wasDown) $("live").src = "/live.mjpg?t=" + Date.now();
       wasDown = !s.camera_online;
     } catch (e) {
-      statusEl.textContent = "● Mất kết nối tới Pi";
-      statusEl.style.color = "var(--bad)";
+      $("f-camera").textContent = "Không kết nối được tới Pi";
+      $("f-camera").className = "state-bad";
       wasDown = true;
     }
   }
-  refresh();
-  setInterval(refresh, 2000);
+  tick(); setInterval(tick, 1000);
+  refresh(); setInterval(refresh, 3000);
 </script>
 {% endblock %}

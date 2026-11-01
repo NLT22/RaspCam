@@ -1,75 +1,64 @@
 {% extends "base.html" %}
+{% block title %}Xem lại – RaspCam{% endblock %}
 {% block body %}
+{% set active = "recordings" %}
 {% include "nav.html" %}
-<main>
-  <div class="card">
-    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:12px">
-      <h2 style="margin:0">Xem lại</h2>
-      <select id="day" aria-label="Ngày"></select>
-      <span id="now" class="muted"></span>
+<main class="page">
+  <div class="screen">
+    <video id="va" playsinline muted preload="auto"></video>
+    <video id="vb" playsinline muted preload="auto" hidden></video>
+    <div class="osd"><time id="osd"></time></div>
+    <div class="screen-msg" id="empty" hidden>
+      <strong>Chưa có bản ghi nào</strong>
+      <span>Camera ghi liên tục. Đoạn đầu tiên sẽ xuất hiện ở đây sau khoảng một phút.</span>
     </div>
-    <video id="player" controls muted playsinline
-           style="width:100%; display:block; background:#000; border-radius:8px; aspect-ratio:16/9"></video>
-    <div id="list"></div>
+    <div class="toast" id="toast" role="status" hidden></div>
+  </div>
+
+  <div id="player-ui" hidden>
+    <div class="transport">
+      <div class="jog">
+        <button data-seek="-60" title="Lùi 1 phút (Shift + ←)">−1 phút</button>
+        <button data-seek="-10" title="Lùi 10 giây (←)">−10 giây</button>
+        <button id="play" class="primary" aria-label="Phát" title="Phát / dừng (Space)"></button>
+        <button data-seek="10" title="Tới 10 giây (→)">+10 giây</button>
+        <button data-seek="60" title="Tới 1 phút (Shift + →)">+1 phút</button>
+      </div>
+      <div class="rate" role="group" aria-label="Tốc độ phát">
+        <button data-rate="1" aria-pressed="true">1x</button>
+        <button data-rate="2" aria-pressed="false">2x</button>
+        <button data-rate="4" aria-pressed="false">4x</button>
+        <button data-rate="8" aria-pressed="false">8x</button>
+        <button data-rate="16" aria-pressed="false">16x</button>
+      </div>
+      <a class="button" id="download" href="#" download>
+        <svg viewBox="0 0 24 24"><path d="M11 4h2v8.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4 3.3 3.3zM5 18h14v2H5z"/></svg>
+        <span id="download-label">Tải xuống</span>
+      </a>
+    </div>
+
+    <section class="timeline" aria-label="Dòng thời gian">
+      <div class="track-head">
+        <div class="day">
+          <button id="prev-day" aria-label="Ngày trước"><svg viewBox="0 0 24 24"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z"/></svg></button>
+          <h2 class="day-label" id="day-label"></h2>
+          <button id="next-day" aria-label="Ngày sau"><svg viewBox="0 0 24 24"><path d="M8.6 16.6 10 18l6-6-6-6-1.4 1.4 4.6 4.6z"/></svg></button>
+        </div>
+        <span id="day-summary"></span>
+      </div>
+      <div class="track track-day" id="day-track" role="slider" tabindex="0" aria-label="Chọn thời điểm trong ngày"></div>
+      <div class="ticks" aria-hidden="true">
+        <span style="left:0">0h</span><span style="left:12.5%">3h</span><span style="left:25%">6h</span><span style="left:37.5%">9h</span>
+        <span style="left:50%">12h</span><span style="left:62.5%">15h</span><span style="left:75%">18h</span><span style="left:87.5%">21h</span><span style="left:100%">24h</span>
+      </div>
+
+      <div class="track-head"><h2 id="hour-title"></h2><span>Bấm vào ảnh để xem từ lúc đó</span></div>
+      <div class="track" id="hour-track" role="slider" tabindex="0" aria-label="Chọn thời điểm trong giờ"></div>
+      <div class="thumbs" id="thumbs"></div>
+    </section>
+
+    <p class="hint">Phím tắt: <kbd>Space</kbd> phát hoặc dừng, <kbd>←</kbd> <kbd>→</kbd> lùi hoặc tới 10 giây, giữ <kbd>Shift</kbd> để nhảy 1 phút.</p>
   </div>
 </main>
-<script>
-  const daySel = document.getElementById("day");
-  const list = document.getElementById("list");
-  const player = document.getElementById("player");
-  const nowEl = document.getElementById("now");
-  let segs = [], buttons = [], current = -1;
-  const time = ts => new Date(ts * 1000).toLocaleTimeString("vi-VN", {hour12: false});
-  const pad = n => String(n).padStart(2, "0");
-
-  async function api(url) {
-    const r = await fetch(url);
-    if (r.status === 401) { location.href = "/login"; throw new Error("401"); }
-    return r.json();
-  }
-
-  async function loadDays() {
-    const days = await api("/api/days");
-    daySel.innerHTML = days.map(d => `<option>${d}</option>`).join("");
-    if (!days.length) { list.textContent = "Chưa có bản ghi nào."; return; }
-    await loadDay(days[0]);
-  }
-
-  async function loadDay(day) {
-    segs = await api("/api/segments?day=" + encodeURIComponent(day));
-    list.innerHTML = "";
-    buttons = [];
-    const rows = {};
-    segs.forEach((s, i) => {
-      const d = new Date(s.start * 1000);
-      const h = pad(d.getHours());
-      if (!rows[h]) {
-        rows[h] = document.createElement("div");
-        rows[h].className = "hour";
-        rows[h].innerHTML = `<span class="muted">${h}:00</span>`;
-        list.appendChild(rows[h]);
-      }
-      const b = document.createElement("button");
-      b.className = "seg";
-      b.textContent = pad(d.getMinutes());
-      b.title = `${time(s.start)} · ${Math.round(s.duration)} giây · ${(s.size / 1e6).toFixed(1)} MB`;
-      b.onclick = () => play(i);
-      rows[h].appendChild(b);
-      buttons.push(b);
-    });
-  }
-
-  function play(i) {
-    if (i < 0 || i >= segs.length) return;
-    current = i;
-    player.src = "/media/" + segs[i].name;
-    player.play();
-    nowEl.textContent = `${time(segs[i].start)} – ${time(segs[i].end)}`;
-    buttons.forEach((b, j) => b.classList.toggle("active", j === i));
-  }
-
-  player.addEventListener("ended", () => play(current + 1));
-  daySel.addEventListener("change", () => loadDay(daySel.value));
-  loadDays();
-</script>
+<script src="/static/recordings.js"></script>
 {% endblock %}

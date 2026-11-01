@@ -1,8 +1,8 @@
-<header>
-  <nav style="display:flex; gap:16px; align-items:center">
-    <strong>RaspCam</strong>
-    <a href="/">Trực tiếp</a>
-    <a href="/recordings">Xem lại</a>
+<header class="bar">
+  <a class="brand" href="/"><i class="brand-mark" aria-hidden="true"></i><span>RaspCam</span></a>
+  <nav class="tabs" aria-label="Trang">
+    <a href="/" {% if active == "live" %}aria-current="page"{% endif %}>Trực tiếp</a>
+    <a href="/recordings" {% if active == "recordings" %}aria-current="page"{% endif %}>Xem lại</a>
   </nav>
-  <form method="post" action="/logout" style="margin:0"><button type="submit">Đăng xuất</button></form>
+  <form method="post" action="/logout"><button type="submit">Đăng xuất</button></form>
 </header>
