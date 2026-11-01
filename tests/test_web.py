@@ -38,12 +38,26 @@ def thumbs_dir(tmp_path):
 
 
 @pytest.fixture
-def client(latest, store, seg_dir, thumbs_dir):
+def events(tmp_path):
+    from raspcam.db import EventStore
+    return EventStore(tmp_path / "db.sqlite")
+
+
+@pytest.fixture
+def events_dir(tmp_path):
+    d = tmp_path / "events"
+    d.mkdir()
+    return d
+
+
+@pytest.fixture
+def client(latest, store, seg_dir, thumbs_dir, events, events_dir):
     cfg = parse_config({
         "camera": {"device": "testsrc"},
         "web": {"password_hash": hash_password("secret"), "secret_key": "k" * 32},
     })
-    return TestClient(create_app(cfg, latest, lambda: STATUS, store, seg_dir, thumbs_dir=thumbs_dir))
+    return TestClient(create_app(cfg, latest, lambda: STATUS, store, seg_dir,
+                                 thumbs_dir=thumbs_dir, events=events, events_dir=events_dir))
 
 
 def login(client, password="secret"):
@@ -203,3 +217,24 @@ def test_static_files_are_public(client):
     r = client.get("/static/app.css")
     assert r.status_code == 200 and "text/css" in r.headers["content-type"]
     assert client.get("/static/fonts/be-vietnam-pro-vietnamese-400-normal.woff2").status_code == 200
+
+
+def test_events_api(client, events, events_dir):
+    start = time.mktime(time.strptime("2026-11-01 10:00:00", "%Y-%m-%d %H:%M:%S"))
+    done = events.open(start)
+    events.close(done, start + 12)
+    running = events.open(start + 100)
+    assert client.get("/api/events?day=2026-11-01").status_code == 401
+    login(client)
+    got = client.get("/api/events", params={"day": "2026-11-01"}).json()
+    assert [(e["id"], e["end"]) for e in got] == [(done, start + 12), (running, None)]
+
+
+def test_event_snapshot(client, events, events_dir):
+    eid = events.open(1.0)
+    (events_dir / f"{eid}.jpg").write_bytes(b"\xff\xd8x\xff\xd9")
+    assert client.get(f"/events/{eid}.jpg").status_code == 401
+    login(client)
+    r = client.get(f"/events/{eid}.jpg")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert client.get("/events/999.jpg").status_code == 404

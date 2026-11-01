@@ -17,7 +17,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .auth import verify_password
 from .config import Config
-from .db import SegmentStore
+from .db import EventStore, SegmentStore
 from .frames import LatestFrame
 from .retention import GB
 from .segments import parse_start, thumb_name
@@ -46,6 +46,7 @@ async def mjpeg_stream(latest: LatestFrame, fps: int,
 def create_app(cfg: Config, latest: LatestFrame, recorder_status: Callable[[], dict],
                store: SegmentStore, segments_dir: Path, *,
                thumbs_dir: Path | None = None,
+               events: EventStore | None = None, events_dir: Path | None = None,
                on_shutdown: Callable[[], None] | None = None) -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -154,5 +155,25 @@ def create_app(cfg: Config, latest: LatestFrame, recorder_status: Callable[[], d
             return Response(status_code=404)
         return FileResponse(path, media_type="image/jpeg",
                             headers={"Cache-Control": "private, max-age=86400"})
+
+    @app.get("/api/events")
+    def events_api(request: Request, day: str):
+        if not logged_in(request):
+            return Response(status_code=401)
+        if events is None:
+            return []
+        return [{"id": e.id, "start": e.start_ts, "end": e.end_ts, "peak": e.peak}
+                for e in events.by_day(day)]
+
+    @app.get("/events/{event_id}.jpg")
+    def event_snapshot(request: Request, event_id: int):
+        if not logged_in(request):
+            return Response(status_code=401)
+        path = events_dir / f"{event_id}.jpg" if events_dir else None
+        if path is None or not path.is_file():
+            return Response(status_code=404)
+        # short cache: the snapshot is replaced while the event is still going
+        return FileResponse(path, media_type="image/jpeg",
+                            headers={"Cache-Control": "private, max-age=30"})
 
     return app
