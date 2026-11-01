@@ -64,3 +64,69 @@ def test_tracker_needs_consecutive_frames_and_cools_down():
     assert t.update(14.9, False) is None         # 9.9 s since last motion
     assert t.update(15.0, False) == ("end", 5.0)
     assert not t.active
+
+
+import time
+
+from raspcam.config import MotionConfig
+from raspcam.db import EventStore
+from raspcam.frames import LatestFrame
+from raspcam.motion import MotionMonitor
+
+
+def monitor(tmp_path, **kw):
+    events = EventStore(tmp_path / "db.sqlite")
+    latest = LatestFrame()
+    latest.set(b"\xff\xd8snap\xff\xd9")
+    snaps = tmp_path / "events"
+    snaps.mkdir()
+    cfg = MotionConfig(**{"min_frames": 2, "cooldown_seconds": 3, **kw})
+    return MotionMonitor(cfg, events, latest, snaps), events, snaps
+
+
+def run_scene(m, t0=1000.0):
+    """1 s still, 2 s of a moving block, 5 s still (5 fps)."""
+    t = t0
+    for i in range(40):
+        moving = 5 <= i < 15
+        m.process(frame(block=(10 + 20 * (i - 5), 60)) if moving else frame(), t)
+        t += 0.2
+    return t
+
+
+def test_monitor_records_an_event_with_snapshot(tmp_path):
+    m, events, snaps = monitor(tmp_path)
+    run_scene(m)
+    [e] = events.all()
+    assert abs(e.start_ts - 1001.0) < 1e-6 and abs(e.end_ts - 1002.8) < 1e-6
+    assert e.peak > 0.01
+    assert (snaps / f"{e.id}.jpg").read_bytes() == b"\xff\xd8snap\xff\xd9"
+    assert not m.active
+
+
+def test_stop_closes_an_open_event(tmp_path):
+    m, events, _ = monitor(tmp_path, cooldown_seconds=60)
+    run_scene(m)
+    assert events.all()[0].end_ts is None
+    m.stop()
+    assert events.all()[0].end_ts is not None
+
+
+def test_gap_in_frames_resets_background(tmp_path):
+    m, events, _ = monitor(tmp_path)
+    m.process(frame(), 0.0)
+    m.process(frame(block=(100, 60)), 10.0)   # first frame after a restart: new background
+    assert m.score == 0.0
+
+
+def test_worker_thread_processes_submitted_frames(tmp_path):
+    m, events, _ = monitor(tmp_path)
+    m.start()
+    try:
+        m.submit(frame(), 0.0)
+        deadline = time.monotonic() + 2
+        while m.frames_seen < 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert m.frames_seen == 1
+    finally:
+        m.stop()
