@@ -1,28 +1,34 @@
 "use strict";
-// Recordings page: plays 1-minute segments as one continuous day, with a
-// 24 h track, a 1 h zoom track, 5-minute thumbnails, and motion events.
+// Recordings page: one player, one timeline (24 h or the current hour), and a
+// list of motion activity. 1-minute segments play back as one continuous day.
 //
 // Two <video> elements take turns: one plays while the other preloads the
 // next segment, so playback crosses segment boundaries without a pause.
 
 const $ = id => document.getElementById(id);
-const DAY = 86400, HOUR = 3600, GAP = 5; // seconds; shorter gaps count as continuous
+const DAY = 86400, HOUR = 3600;
+const GAP = 5;        // seconds; shorter recording gaps count as continuous
+const MERGE = 60;     // motion events closer than this form one activity
+const LEAD = 3;       // start playback this many seconds before an activity
+const RATES = [1, 2, 4, 8, 16];
 
 const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
 const ICON_PAUSE = '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>';
 
 const st = {
-  days: [],        // newest first
-  day: null,       // "YYYY-MM-DD"
-  dayStart: 0,     // epoch seconds of local midnight
-  segs: [],        // {name, start, end, duration, size}, oldest first
-  ranges: [],      // merged recorded spans [{start, end}]
-  events: [],      // motion events {id, start, end (null while going), peak}, oldest first
+  days: [],          // newest first
+  day: null,         // "YYYY-MM-DD"
+  dayStart: 0,       // epoch seconds of local midnight
+  segs: [],          // {name, start, end, duration, size}, oldest first
+  ranges: [],        // merged recorded spans [{start, end}]
+  events: [],        // motion events {id, start, end|null, peak}, oldest first
+  groups: [],        // activities: merged events, oldest first
   motionEnabled: false,
-  cur: -1,         // index of the segment on the front player
+  cur: -1,           // index of the segment on the front player
   rate: 1,
   wantPlay: false,
-  hour: -1,        // hour currently drawn on the hour track
+  zoom: "day",       // "day" | "hour"
+  view: [0, DAY],    // [from, length] currently drawn on the track
 };
 let front = $("va"), back = $("vb");
 
@@ -32,14 +38,29 @@ const at = ts => new Date(ts * 1000);
 const hms = ts => { const d = at(ts); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
 const hm = ts => hms(ts).slice(0, 5);
 const dmy = ts => { const d = at(ts); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`; };
+const isoDay = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const weekday = new Intl.DateTimeFormat("vi-VN", {weekday: "long"});
 const midnight = day => { const [y, m, d] = day.split("-").map(Number); return new Date(y, m - 1, d).getTime() / 1000; };
 const thumbUrl = seg => "/thumbs/" + seg.name.replace(/\.mp4$/, ".jpg");
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const nowTs = () => Date.now() / 1000;
 
 function dayTitle(day) {
-  const w = weekday.format(at(midnight(day)));
-  return `${w[0].toUpperCase()}${w.slice(1)}, ${dmy(midnight(day))}`;
+  const today = new Date();
+  const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+  const d = at(midnight(day));
+  const short = `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
+  if (day === isoDay(today)) return `Hôm nay, ${short}`;
+  if (day === isoDay(yesterday)) return `Hôm qua, ${short}`;
+  const w = weekday.format(d);
+  return `${w[0].toUpperCase()}${w.slice(1)}, ${short}`;
+}
+
+function duration(secs) {
+  secs = Math.max(1, Math.round(secs));
+  if (secs < 60) return `${secs} giây`;
+  const m = Math.floor(secs / 60), s = secs % 60;
+  return s ? `${m} phút ${s} giây` : `${m} phút`;
 }
 
 async function api(url) {
@@ -69,6 +90,23 @@ function mergeRanges(segs) {
   return out;
 }
 
+// Motion events close together are one "activity" (someone walking around).
+function groupEvents(events) {
+  const groups = [];
+  for (const e of events) {
+    const end = e.end ?? nowTs();
+    const g = groups[groups.length - 1];
+    if (g && e.start - g.end <= MERGE) {
+      g.end = Math.max(g.end, end);
+      g.open = g.open || e.end === null;
+      if (e.peak > g.best.peak) g.best = e;
+    } else {
+      groups.push({start: e.start, end, open: e.end === null, best: e});
+    }
+  }
+  return groups;
+}
+
 // Segment containing ts ({i, exact: true}), else the first one after it.
 function locate(ts) {
   const s = st.segs;
@@ -86,43 +124,49 @@ function now() {
   return st.segs[st.cur].start + (front.currentTime || 0);
 }
 
+async function fetchDay(day) {
+  const q = "?day=" + encodeURIComponent(day);
+  return Promise.all([api("/api/segments" + q), api("/api/events" + q)]);
+}
+
 async function loadDay(day, startAt) {
   st.day = day;
   st.dayStart = midnight(day);
-  const q = "?day=" + encodeURIComponent(day);
-  [st.segs, st.events] = await Promise.all([api("/api/segments" + q), api("/api/events" + q)]);
+  [st.segs, st.events] = await fetchDay(day);
   st.ranges = mergeRanges(st.segs);
+  st.groups = groupEvents(st.events);
   st.cur = -1;
-  st.hour = -1;
   back.removeAttribute("src");
   back.dataset.name = "";
-  drawDay();
-  drawEventList();
+  drawSide();
+  drawTrack();
   if (!st.segs.length) { render(); return; }
-  const last = st.segs[st.segs.length - 1];
-  seekTo(startAt ?? Math.max(st.segs[0].start, last.end - 300), {quiet: true});
+  if (startAt == null) {
+    // open on the latest activity that is already on disk, else the last few minutes
+    const latest = [...st.groups].reverse().find(g => g.start < st.segs.at(-1).end);
+    startAt = latest ? latest.start - LEAD : Math.max(st.segs[0].start, st.segs.at(-1).end - 300);
+  }
+  seekTo(startAt, {quiet: true});
 }
 
-// Pick up segments and events recorded since the page loaded (or removed by retention).
+// Pick up segments and events recorded since the page loaded.
 async function refreshDay() {
   if (!st.day) return;
   const curName = st.cur >= 0 ? st.segs[st.cur].name : null;
-  const q = "?day=" + encodeURIComponent(st.day);
-  const [segs, events] = await Promise.all([api("/api/segments" + q), api("/api/events" + q)]);
-  if (JSON.stringify(events) !== JSON.stringify(st.events)) {
-    st.events = events;
-    drawEventList();
-    drawDay();
-    st.hour = -1;  // redraw the hour track's markers on the next render
-    render();
+  const [segs, events] = await fetchDay(st.day);
+  const eventsChanged = JSON.stringify(events) !== JSON.stringify(st.events);
+  const segsChanged = segs.length !== st.segs.length || segs.at(-1)?.name !== st.segs.at(-1)?.name;
+  if (!eventsChanged && !segsChanged) return;
+  st.events = events;
+  st.groups = groupEvents(events);
+  if (segsChanged) {
+    st.segs = segs;
+    st.ranges = mergeRanges(segs);
+    st.cur = curName ? segs.findIndex(s => s.name === curName) : -1;
+    prepareNext();
   }
-  if (segs.length === st.segs.length && segs.at(-1)?.name === st.segs.at(-1)?.name) return;
-  st.segs = segs;
-  st.ranges = mergeRanges(segs);
-  st.cur = curName ? segs.findIndex(s => s.name === curName) : -1;
-  st.hour = -1;
-  drawDay();
-  prepareNext();
+  drawSide();
+  drawTrack();
   render();
 }
 
@@ -181,19 +225,20 @@ function onEnded(e) {
   if (e.target !== front) return;
   const next = st.cur + 1;
   if (next < st.segs.length) {
-    const gap = st.segs[next].start - st.segs[st.cur].end;
-    if (gap > GAP) toast(`Bỏ qua khoảng không ghi ${hm(st.segs[st.cur].end)}–${hm(st.segs[next].start)}.`);
+    if (st.segs[next].start - st.segs[st.cur].end > GAP) {
+      toast(`Bỏ qua khoảng không ghi ${hm(st.segs[st.cur].end)}–${hm(st.segs[next].start)}.`);
+    }
     show(next, 0);
-  } else {
-    st.wantPlay = false;
-    render();
-    // the newest day keeps growing: try to continue once the next minute is saved
-    if (st.day === st.days[0]) setTimeout(async () => {
-      const before = st.segs.length;
-      await refreshDay();
-      if (st.segs.length > before) { st.wantPlay = true; show(before, 0); }
-    }, 5000);
+    return;
   }
+  st.wantPlay = false;
+  render();
+  // today keeps growing: continue once the next minute has been saved
+  if (st.day === st.days[0]) setTimeout(async () => {
+    const before = st.segs.length;
+    await refreshDay();
+    if (st.segs.length > before) { st.wantPlay = true; show(before, 0); }
+  }, 5000);
 }
 
 function onError(e) {
@@ -211,24 +256,39 @@ for (const v of [$("va"), $("vb")]) {
   v.addEventListener("seeked", e => { if (e.target === front) { render(); saveHash(); } });
 }
 
-function togglePlay() {
+function play(on) {
   if (st.cur < 0) return;
-  st.wantPlay = front.paused;
-  if (st.wantPlay) front.play().catch(() => { st.wantPlay = false; render(); });
+  st.wantPlay = on;
+  if (on) front.play().catch(() => { st.wantPlay = false; render(); });
   else front.pause();
   render();
 }
 
-function setRate(r) {
-  st.rate = r;
-  for (const v of [front, back]) v.defaultPlaybackRate = v.playbackRate = r;
-  document.querySelectorAll("[data-rate]").forEach(b => b.setAttribute("aria-pressed", String(+b.dataset.rate === r)));
+function cycleRate() {
+  st.rate = RATES[(RATES.indexOf(st.rate) + 1) % RATES.length];
+  for (const v of [front, back]) v.defaultPlaybackRate = v.playbackRate = st.rate;
+  render();
+}
+
+function playActivity(g) {
+  st.wantPlay = true;
+  seekTo(g.start - LEAD);
+}
+
+function jumpActivity(dir) {
+  const t = now();
+  // like a music player's "previous": restart the current activity if we are
+  // more than a few seconds into it, otherwise go to the one before
+  const g = dir < 0 ? [...st.groups].reverse().find(g => g.start - LEAD < t - 5)
+                    : st.groups.find(g => g.start - LEAD > t + 1);
+  if (g) playActivity(g);
+  else toast(dir < 0 ? "Không có chuyển động nào trước đó trong ngày." : "Không có chuyển động nào sau đó trong ngày.");
 }
 
 // ---------- drawing ----------
-const pct = (t, from, span) => `${clamp((t - from) / span, 0, 1) * 100}%`;
+const pct = (t, from, length) => `${clamp((t - from) / length, 0, 1) * 100}%`;
 
-function span(cls, start, end, from, length) {
+function bar(cls, start, end, [from, length]) {
   const el = document.createElement("div");
   el.className = cls;
   el.style.left = pct(start, from, length);
@@ -236,8 +296,17 @@ function span(cls, start, end, from, length) {
   return el;
 }
 
-// Recorded ranges underneath, motion events on top, playhead above both.
-function drawSpans(track, from, length) {
+function currentView() {
+  if (st.zoom === "day") return [st.dayStart, DAY];
+  const hour = clamp(Math.floor((now() - st.dayStart) / HOUR), 0, 23);
+  return [st.dayStart + hour * HOUR, HOUR];
+}
+
+// Recorded ranges underneath, motion on top, playhead above both.
+function drawTrack() {
+  const track = $("track");
+  const view = st.view = currentView();
+  const [from, length] = view;
   track.querySelectorAll(".range, .event").forEach(el => el.remove());
   let playhead = track.querySelector(".playhead");
   if (!playhead) {
@@ -245,99 +314,64 @@ function drawSpans(track, from, length) {
     track.append(playhead);
   }
   for (const r of st.ranges) {
-    if (r.end > from && r.start < from + length) track.prepend(span("range", r.start, r.end, from, length));
+    if (r.end > from && r.start < from + length) track.prepend(bar("range", r.start, r.end, view));
   }
-  const nowTs = Date.now() / 1000;
   for (const e of st.events) {
-    const end = e.end ?? nowTs;
-    if (end > from && e.start < from + length) track.insertBefore(span("event", e.start, end, from, length), playhead);
+    const end = e.end ?? nowTs();
+    if (end > from && e.start < from + length) track.insertBefore(bar("event", e.start, end, view), playhead);
+  }
+  const ticks = $("ticks");
+  ticks.textContent = "";
+  const marks = st.zoom === "day"
+    ? [0, 3, 6, 9, 12, 15, 18, 21, 24].map(h => [h / 24, `${h}h`, h % 6 !== 0])
+    : [0, 10, 20, 30, 40, 50, 60].map(m => [m / 60, hm(from + m * 60), m % 30 !== 0]);
+  for (const [x, label, minor] of marks) {
+    const s = Object.assign(document.createElement("span"), {textContent: label});
+    s.style.left = `${x * 100}%`;
+    if (minor) s.className = "minor";
+    ticks.append(s);
   }
 }
 
-function drawDay() {
+function drawSide() {
   const idx = st.days.indexOf(st.day);
   $("day-label").textContent = dayTitle(st.day);
   $("prev-day").disabled = idx < 0 || idx >= st.days.length - 1;
   $("next-day").disabled = idx <= 0;
-  const recorded = st.ranges.reduce((sum, r) => sum + (r.end - r.start), 0);
-  $("day-summary").textContent = st.segs.length
-    ? `Đã ghi ${Math.floor(recorded / HOUR)} giờ ${pad(Math.round(recorded % HOUR / 60))} phút, từ ${hm(st.segs[0].start)} đến ${hm(st.segs.at(-1).end)}`
-    : "Không có bản ghi trong ngày này";
-  drawSpans($("day-track"), st.dayStart, DAY);
-}
 
-function drawHour(hour) {
-  st.hour = hour;
-  const from = st.dayStart + hour * HOUR;
-  $("hour-title").textContent = `${pad(hour)}:00 – ${pad((hour + 1) % 24)}:00`;
-  drawSpans($("hour-track"), from, HOUR);
-  const box = $("thumbs");
-  box.textContent = "";
-  for (let k = 0; k < 12; k++) {
-    const mark = from + k * 300;
-    const {i, exact} = locate(mark);
-    const seg = i >= 0 && (exact || st.segs[i].start < mark + 300) ? st.segs[i] : null;
+  const n = st.groups.length;
+  $("summary").textContent = !st.motionEnabled && !n ? "Phát hiện chuyển động đang tắt"
+    : n ? `${n} lần có chuyển động` : "";
+  $("side-empty").hidden = n > 0 || !st.segs.length;
+  $("side-empty-text").textContent = st.motionEnabled
+    ? `${st.day === st.days[0] ? "Hôm nay" : "Ngày này"} không có chuyển động nào.`
+    : "Bật lại bằng recording.mode: both trong config.yaml.";
+
+  const list = $("activity");
+  list.textContent = "";
+  for (const g of [...st.groups].reverse()) {        // newest first
     const b = document.createElement("button");
-    b.className = "thumb";
-    b.dataset.from = mark;
-    b.dataset.to = mark + 300;
-    if (seg) {
-      const img = new Image();
-      img.loading = "lazy";
-      img.alt = "";
-      img.src = thumbUrl(seg);
-      img.onerror = () => img.replaceWith(Object.assign(document.createElement("i"), {className: "blank"}));
-      b.append(img);
-      b.onclick = () => seekTo(Math.max(mark, seg.start));
-      b.setAttribute("aria-label", `Xem từ ${hm(Math.max(mark, seg.start))}`);
-    } else {
-      b.append(Object.assign(document.createElement("i"), {className: "blank"}));
-      b.disabled = true;
-      b.setAttribute("aria-label", `Không có bản ghi ${hm(mark)}`);
-    }
-    b.append(Object.assign(document.createElement("span"), {textContent: hm(mark)}));
-    box.append(b);
-  }
-}
-
-function eventDuration(e) {
-  if (e.end === null) return "đang diễn ra";
-  const secs = Math.max(1, Math.round(e.end - e.start));
-  return secs < 60 ? `${secs} giây` : `${Math.floor(secs / 60)} phút ${secs % 60} giây`;
-}
-
-function drawEventList() {
-  const box = $("event-list");
-  box.textContent = "";
-  $("events").hidden = !st.motionEnabled && !st.events.length;
-  $("events-empty").hidden = st.events.length > 0;
-  $("events-title").textContent = st.events.length ? `Chuyển động (${st.events.length} lần)` : "Chuyển động";
-  for (const e of [...st.events].reverse()) {          // newest first
-    const b = document.createElement("button");
-    b.className = "event-item";
-    b.dataset.start = e.start;
-    b.dataset.end = e.end ?? Infinity;
+    b.className = "act";
+    b.dataset.start = g.start;
+    b.dataset.end = g.end;
     const img = new Image();
     img.loading = "lazy";
     img.alt = "";
-    img.src = `/events/${e.id}.jpg`;
+    img.src = `/events/${g.best.id}.jpg`;
     img.onerror = () => img.replaceWith(Object.assign(document.createElement("i"), {className: "blank"}));
-    b.append(img,
-      Object.assign(document.createElement("strong"), {textContent: hms(e.start)}),
-      Object.assign(document.createElement("span"), {textContent: eventDuration(e)}));
-    b.onclick = () => seekTo(e.start - 3);
+    const sameMinute = hm(g.start) === hm(g.end);
+    const text = document.createElement("div");
+    text.append(
+      Object.assign(document.createElement("strong"),
+        {textContent: sameMinute ? hm(g.start) : `${hm(g.start)} – ${hm(g.end)}`}),
+      Object.assign(document.createElement("span"),
+        {textContent: g.open ? "Đang diễn ra" : duration(g.end - g.start)}));
+    b.append(img, text);
+    b.onclick = () => playActivity(g);
     const li = document.createElement("li");
     li.append(b);
-    box.append(li);
+    list.append(li);
   }
-}
-
-function jumpEvent(dir) {
-  const t = now();
-  const e = dir < 0 ? [...st.events].reverse().find(e => e.start < t - 1)
-                    : st.events.find(e => e.start - 3 > t + 1);
-  if (e) seekTo(e.start - 3);
-  else toast(dir < 0 ? "Không có chuyển động nào trước đó trong ngày." : "Không có chuyển động nào sau đó trong ngày.");
 }
 
 // Keep the position in the URL so a reload or a shared link opens the same moment.
@@ -352,40 +386,35 @@ function render() {
   const t = now();
   const playing = st.cur >= 0 && !front.paused;
   $("osd").textContent = st.cur >= 0 ? `${dmy(t)} ${hms(t)}` : "";
-  const play = $("play");
-  play.innerHTML = playing ? ICON_PAUSE : ICON_PLAY;
-  play.setAttribute("aria-label", playing ? "Dừng" : "Phát");
+  const playBtn = $("play");
+  playBtn.innerHTML = playing ? ICON_PAUSE : ICON_PLAY;
+  playBtn.setAttribute("aria-label", playing ? "Dừng" : "Phát");
+  $("rate").textContent = `${st.rate}x`;
 
-  const hour = clamp(Math.floor((t - st.dayStart) / HOUR), 0, 23);
-  if (hour !== st.hour) drawHour(hour);
-  $("day-track").querySelector(".playhead").style.left = pct(t, st.dayStart, DAY);
-  $("hour-track").querySelector(".playhead").style.left = pct(t, st.dayStart + hour * HOUR, HOUR);
-  for (const track of [$("day-track"), $("hour-track")]) track.setAttribute("aria-valuetext", hms(t));
-  document.querySelectorAll(".thumb").forEach(b =>
-    b.setAttribute("aria-current", String(t >= +b.dataset.from && t < +b.dataset.to)));
-  document.querySelectorAll(".event-item").forEach(b =>
-    b.setAttribute("aria-current", String(t >= +b.dataset.start - 3 && t <= +b.dataset.end + 3)));
+  if (st.zoom === "hour" && currentView()[0] !== st.view[0]) drawTrack();
+  const [from, length] = st.view;
+  $("track").querySelector(".playhead").style.left = pct(t, from, length);
+  $("track").setAttribute("aria-valuetext", hms(t));
+
+  document.querySelectorAll(".act").forEach(b =>
+    // +1 s slack: the video may land a frame before the exact seek target
+    b.setAttribute("aria-current", String(t >= +b.dataset.start - LEAD - 1 && t <= +b.dataset.end + LEAD)));
 
   const dl = $("download");
+  dl.hidden = st.cur < 0;
   if (st.cur >= 0) {
     const seg = st.segs[st.cur];
     dl.href = `/media/${seg.name}?download=1`;
-    $("download-label").textContent = `Tải đoạn ${hm(seg.start)}–${hm(seg.end)}`;
-    dl.hidden = false;
-  } else {
-    dl.hidden = true;
+    dl.title = `Tải phút này (${hm(seg.start)}–${hm(seg.end)})`;
   }
-
   if (Date.now() - lastHashUpdate > 1000) saveHash();
 }
 
-// ---------- track interaction: hover/drag shows a preview, release seeks ----------
-function attachTrack(track, range) {
-  const tip = document.createElement("div");
-  tip.className = "tip";
-  tip.hidden = true;
-  const img = new Image();
-  img.alt = "";
+// ---------- track: hover/drag shows a preview, release seeks ----------
+(function attachTrack() {
+  const track = $("track");
+  const tip = Object.assign(document.createElement("div"), {className: "tip", hidden: true});
+  const img = Object.assign(new Image(), {alt: ""});
   const label = document.createElement("div");
   tip.append(img, label);
   track.append(tip);
@@ -393,8 +422,8 @@ function attachTrack(track, range) {
 
   const timeAt = e => {
     const box = track.getBoundingClientRect();
-    const [from, span] = range();
-    return from + clamp((e.clientX - box.left) / box.width, 0, 0.99999) * span;
+    const [from, length] = st.view;
+    return from + clamp((e.clientX - box.left) / box.width, 0, 0.99999) * length;
   };
   const preview = e => {
     const t = timeAt(e);
@@ -419,17 +448,19 @@ function attachTrack(track, range) {
     seekTo(timeAt(e));
   });
   track.addEventListener("pointercancel", () => { dragging = false; tip.hidden = true; });
-}
-
-attachTrack($("day-track"), () => [st.dayStart, DAY]);
-attachTrack($("hour-track"), () => [st.dayStart + st.hour * HOUR, HOUR]);
+})();
 
 // ---------- controls ----------
-$("play").addEventListener("click", togglePlay);
-document.querySelectorAll("[data-seek]").forEach(b => b.addEventListener("click", () => seekTo(now() + +b.dataset.seek)));
-document.querySelectorAll("[data-rate]").forEach(b => b.addEventListener("click", () => setRate(+b.dataset.rate)));
-$("prev-event").addEventListener("click", () => jumpEvent(-1));
-$("next-event").addEventListener("click", () => jumpEvent(1));
+$("play").addEventListener("click", () => play(front.paused));
+$("rate").addEventListener("click", cycleRate);
+document.querySelectorAll("[data-seek]").forEach(b =>
+  b.addEventListener("click", () => seekTo(now() + +b.dataset.seek)));
+document.querySelectorAll("[data-zoom]").forEach(b => b.addEventListener("click", () => {
+  st.zoom = b.dataset.zoom;
+  document.querySelectorAll("[data-zoom]").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+  drawTrack();
+  render();
+}));
 $("prev-day").addEventListener("click", () => {
   const i = st.days.indexOf(st.day);
   if (i < st.days.length - 1) loadDay(st.days[i + 1], null);
@@ -438,16 +469,16 @@ $("next-day").addEventListener("click", () => {
   const i = st.days.indexOf(st.day);
   if (i > 0) loadDay(st.days[i - 1], null);
 });
+$("from-start").addEventListener("click", () => { st.wantPlay = true; seekTo(st.dayStart); });
 document.addEventListener("keydown", e => {
   if (e.target.closest("input, select, textarea") || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.key === " " && !e.target.closest("button, a")) { e.preventDefault(); togglePlay(); }
-  else if (e.key === ",") jumpEvent(-1);
-  else if (e.key === ".") jumpEvent(1);
+  if (e.key === " " && !e.target.closest("button, a")) { e.preventDefault(); play(front.paused); }
   else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
     e.preventDefault();
-    const step = (e.shiftKey ? 60 : 10) * (e.key === "ArrowLeft" ? -1 : 1);
-    seekTo(now() + step);
+    seekTo(now() + (e.shiftKey ? 60 : 10) * (e.key === "ArrowLeft" ? -1 : 1));
   }
+  else if (e.key === ",") jumpActivity(-1);
+  else if (e.key === ".") jumpActivity(1);
 });
 
 // ---------- start ----------
@@ -456,7 +487,7 @@ document.addEventListener("keydown", e => {
   st.days = days;
   st.motionEnabled = status.motion?.enabled ?? false;
   if (!st.days.length) { $("empty").hidden = false; return; }
-  $("player-ui").hidden = false;
+  for (const id of ["controls", "timeline", "side"]) $(id).hidden = false;
   front.hidden = false;
   const m = /^#(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})$/.exec(location.hash);
   if (m && st.days.includes(m[1])) {

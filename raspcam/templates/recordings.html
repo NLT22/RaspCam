@@ -3,74 +3,57 @@
 {% block body %}
 {% set active = "recordings" %}
 {% include "nav.html" %}
-<main class="page">
-  <div class="screen">
-    <video id="va" playsinline muted preload="auto"></video>
-    <video id="vb" playsinline muted preload="auto" hidden></video>
-    <div class="osd"><time id="osd"></time></div>
-    <div class="screen-msg" id="empty" hidden>
-      <strong>Chưa có bản ghi nào</strong>
-      <span>Camera ghi liên tục. Đoạn đầu tiên sẽ xuất hiện ở đây sau khoảng một phút.</span>
+<main class="page review">
+  <div class="stage">
+    <div class="screen">
+      <video id="va" playsinline muted preload="auto"></video>
+      <video id="vb" playsinline muted preload="auto" hidden></video>
+      <div class="osd"><time id="osd"></time></div>
+      <div class="screen-msg" id="empty" hidden>
+        <strong>Chưa có bản ghi nào</strong>
+        <span>Camera ghi liên tục. Đoạn đầu tiên sẽ xuất hiện ở đây sau khoảng một phút.</span>
+      </div>
+      <div class="toast" id="toast" role="status" hidden></div>
     </div>
-    <div class="toast" id="toast" role="status" hidden></div>
-  </div>
 
-  <div id="player-ui" hidden>
-    <div class="transport">
-      <div class="jog">
-        <button data-seek="-60" title="Lùi 1 phút (Shift + ←)">−1 phút</button>
-        <button data-seek="-10" title="Lùi 10 giây (←)">−10 giây</button>
-        <button id="play" class="primary" aria-label="Phát" title="Phát / dừng (Space)"></button>
-        <button data-seek="10" title="Tới 10 giây (→)">+10 giây</button>
-        <button data-seek="60" title="Tới 1 phút (Shift + →)">+1 phút</button>
+    <div class="controls" id="controls" hidden>
+      <button id="play" class="primary icon" aria-label="Phát" title="Phát / dừng (Space)"></button>
+      <button class="icon" data-seek="-10" aria-label="Lùi 10 giây" title="Lùi 10 giây (←, giữ Shift: 1 phút)">
+        <svg viewBox="0 0 24 24"><path d="M12 5V2L7 6l5 4V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/><text x="12" y="16.5" text-anchor="middle" font-size="7" font-weight="700">10</text></svg>
+      </button>
+      <button class="icon" data-seek="10" aria-label="Tới 10 giây" title="Tới 10 giây (→, giữ Shift: 1 phút)">
+        <svg viewBox="0 0 24 24"><path d="M12 5V2l5 4-5 4V7a6 6 0 1 0 6 6h2a8 8 0 1 1-8-8z"/><text x="12" y="16.5" text-anchor="middle" font-size="7" font-weight="700">10</text></svg>
+      </button>
+      <span class="spacer"></span>
+      <div class="segmented" role="group" aria-label="Phạm vi dòng thời gian">
+        <button data-zoom="day" aria-pressed="true">24 giờ</button>
+        <button data-zoom="hour" aria-pressed="false">1 giờ</button>
       </div>
-      <div class="rate" role="group" aria-label="Tốc độ phát">
-        <button data-rate="1" aria-pressed="true">1x</button>
-        <button data-rate="2" aria-pressed="false">2x</button>
-        <button data-rate="4" aria-pressed="false">4x</button>
-        <button data-rate="8" aria-pressed="false">8x</button>
-        <button data-rate="16" aria-pressed="false">16x</button>
-      </div>
-      <a class="button" id="download" href="#" download>
+      <button id="rate" class="rate-btn" title="Tốc độ phát: bấm để đổi">1x</button>
+      <a class="button icon" id="download" href="#" download aria-label="Tải phút này" title="Tải phút này">
         <svg viewBox="0 0 24 24"><path d="M11 4h2v8.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4 3.3 3.3zM5 18h14v2H5z"/></svg>
-        <span id="download-label">Tải xuống</span>
       </a>
     </div>
 
-    <section class="timeline" aria-label="Dòng thời gian">
-      <div class="track-head">
-        <div class="day">
-          <button id="prev-day" aria-label="Ngày trước"><svg viewBox="0 0 24 24"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z"/></svg></button>
-          <h2 class="day-label" id="day-label"></h2>
-          <button id="next-day" aria-label="Ngày sau"><svg viewBox="0 0 24 24"><path d="M8.6 16.6 10 18l6-6-6-6-1.4 1.4 4.6 4.6z"/></svg></button>
-        </div>
-        <span id="day-summary"></span>
-      </div>
-      <div class="track track-day" id="day-track" role="slider" tabindex="0" aria-label="Chọn thời điểm trong ngày"></div>
-      <div class="ticks" aria-hidden="true">
-        <span style="left:0">0h</span><span style="left:12.5%">3h</span><span style="left:25%">6h</span><span style="left:37.5%">9h</span>
-        <span style="left:50%">12h</span><span style="left:62.5%">15h</span><span style="left:75%">18h</span><span style="left:87.5%">21h</span><span style="left:100%">24h</span>
-      </div>
-
-      <div class="track-head"><h2 id="hour-title"></h2><span>Bấm vào ảnh để xem từ lúc đó</span></div>
-      <div class="track" id="hour-track" role="slider" tabindex="0" aria-label="Chọn thời điểm trong giờ"></div>
-      <div class="thumbs" id="thumbs"></div>
-    </section>
-
-    <section class="events" id="events" aria-label="Chuyển động" hidden>
-      <div class="track-head">
-        <h2 id="events-title">Chuyển động</h2>
-        <div class="events-nav">
-          <button id="prev-event"><svg viewBox="0 0 24 24"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z"/></svg>Lần trước</button>
-          <button id="next-event">Lần sau<svg viewBox="0 0 24 24"><path d="M8.6 16.6 10 18l6-6-6-6-1.4 1.4 4.6 4.6z"/></svg></button>
-        </div>
-      </div>
-      <p class="events-empty" id="events-empty" hidden>Không phát hiện chuyển động nào trong ngày này.</p>
-      <ol class="event-list" id="event-list"></ol>
-    </section>
-
-    <p class="hint">Phím tắt: <kbd>Space</kbd> phát hoặc dừng, <kbd>←</kbd> <kbd>→</kbd> lùi hoặc tới 10 giây, giữ <kbd>Shift</kbd> để nhảy 1 phút, <kbd>,</kbd> <kbd>.</kbd> tới lần chuyển động trước hoặc sau.</p>
+    <div class="timeline" id="timeline" hidden>
+      <div class="track" id="track" role="slider" tabindex="0" aria-label="Chọn thời điểm"></div>
+      <div class="ticks" id="ticks" aria-hidden="true"></div>
+    </div>
   </div>
+
+  <aside class="side" id="side" hidden>
+    <div class="day">
+      <button id="prev-day" class="icon" aria-label="Ngày trước"><svg viewBox="0 0 24 24"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z"/></svg></button>
+      <h2 id="day-label"></h2>
+      <button id="next-day" class="icon" aria-label="Ngày sau"><svg viewBox="0 0 24 24"><path d="M8.6 16.6 10 18l6-6-6-6-1.4 1.4 4.6 4.6z"/></svg></button>
+    </div>
+    <p class="side-summary" id="summary"></p>
+    <ol class="activity" id="activity"></ol>
+    <div class="side-empty" id="side-empty" hidden>
+      <p id="side-empty-text"></p>
+      <button id="from-start">Xem từ đầu ngày</button>
+    </div>
+  </aside>
 </main>
 <script src="/static/recordings.js"></script>
 {% endblock %}
