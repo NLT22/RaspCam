@@ -1,8 +1,8 @@
 # RaspCam
 
 Security camera for a Raspberry Pi 5 with a USB webcam: live view in the
-browser, continuous H.264 recording with playback, and a storage quota
-(milestones 1–2). Motion detection follows —
+browser, H.264 recording with timeline playback, motion detection with
+events, and a storage quota (milestones 1–3). Design:
 see `docs/superpowers/specs/2026-10-31-security-camera-design.md`.
 
 ## Development (PC)
@@ -29,6 +29,21 @@ when they exceed `storage.quota_gb` or the disk has less than
 `storage.min_free_gb` free. Play them back on the "Xem lại" page (`/recordings`):
 a day timeline, an hour view with 5-minute thumbnails (`thumbs/`), playback
 speed up to 16x, keyboard shortcuts, and a download button per segment.
+
+## Motion detection
+
+`recording.mode` chooses what is kept:
+
+- `both` (default): record everything and mark motion events on the timeline.
+- `motion`: keep only the minutes around motion events (`motion.padding_segments`).
+- `continuous`: record everything, no motion detection.
+
+Too many false alarms? Raise `motion.area_percent` (or `pixel_threshold`). To see
+what values your camera produces, score some recordings:
+
+```bash
+.venv/bin/python scripts/motion_scores.py ~/raspcam-data/segments/20261101-09*.mp4
+```
 
 ## Deploy to the Pi
 
