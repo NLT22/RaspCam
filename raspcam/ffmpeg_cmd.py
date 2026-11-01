@@ -20,18 +20,22 @@ def _input_args(cfg: Config) -> list[str]:
             "-framerate", str(cam.input_fps), "-i", cam.device]
 
 
-def build_command(cfg: Config, segments_dir: Path) -> list[str]:
-    """ffmpeg argv: H.264 segments into segments_dir, live MJPEG on stdout."""
-    rec, live = cfg.recording, cfg.live
-    graph = (f"[0:v]split=2[r][l];"
-             f"[r]fps={rec.fps}[rec];"
-             f"[l]fps={live.fps},scale={live.width}:{live.height}[live]")
-    return [
+def build_command(cfg: Config, segments_dir: Path, motion_fd: int | None = None) -> list[str]:
+    """ffmpeg argv: H.264 segments into segments_dir, live MJPEG on stdout, and
+    (if motion_fd is given) small gray frames for motion detection on that fd."""
+    rec, live, mo = cfg.recording, cfg.live, cfg.motion
+    branches = ["[r]", "[l]"] + (["[m]"] if motion_fd is not None else [])
+    graph = [f"[0:v]split={len(branches)}{''.join(branches)}",
+             f"[r]fps={rec.fps}[rec]",
+             f"[l]fps={live.fps},scale={live.width}:{live.height}[live]"]
+    if motion_fd is not None:
+        graph.append(f"[m]fps={mo.fps},scale={mo.width}:{mo.height},format=gray[motion]")
+    argv = [
         # "error": swscale prints a harmless "deprecated pixel format" warning for
         # MJPEG input that would otherwise show up as last_error in the UI
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
         *_input_args(cfg),
-        "-filter_complex", graph,
+        "-filter_complex", ";".join(graph),
         "-map", "[rec]",
         "-c:v", "libx264", "-preset", rec.preset, "-crf", str(rec.crf),
         "-pix_fmt", "yuv420p", "-g", str(rec.fps * rec.keyframe_seconds),
@@ -42,3 +46,6 @@ def build_command(cfg: Config, segments_dir: Path) -> list[str]:
         "-map", "[live]", "-c:v", "mjpeg", "-q:v", str(live.quality),
         "-f", "mjpeg", "pipe:1",
     ]
+    if motion_fd is not None:
+        argv += ["-map", "[motion]", "-f", "rawvideo", "-pix_fmt", "gray", f"pipe:{motion_fd}"]
+    return argv

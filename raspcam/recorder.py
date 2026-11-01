@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import threading
 import time
 from collections import deque
+from typing import Callable
 
 from .frames import LatestFrame
 from .mjpeg import MjpegSplitter
@@ -14,10 +16,15 @@ log = logging.getLogger(__name__)
 
 
 class Recorder:
-    def __init__(self, argv: list[str], latest: LatestFrame, *,
+    def __init__(self, command: list[str] | Callable[[int | None], list[str]],
+                 latest: LatestFrame, *,
+                 on_motion_frame: Callable[[bytes, float], None] | None = None,
+                 motion_frame_bytes: int = 0,
                  backoff_initial: float = 1.0, backoff_max: float = 30.0,
                  stable_after: float = 60.0):
-        self._argv = argv
+        self._command = command  # a factory gets the motion pipe's fd (or None)
+        self._on_motion = on_motion_frame
+        self._motion_bytes = motion_frame_bytes
         self._latest = latest
         self._backoff_initial = backoff_initial
         self._backoff_max = backoff_max
@@ -74,24 +81,37 @@ class Recorder:
             delay = min(delay * 2, self._backoff_max)
 
     def _run_once(self) -> None:
+        motion_r = motion_w = None
+        if self._on_motion:
+            motion_r, motion_w = os.pipe()
+        argv = self._command(motion_w) if callable(self._command) else self._command
         try:
             # Own session: a terminal's Ctrl+C must not reach ffmpeg as well as us.
             # ffmpeg 7 aborts without writing the MP4 trailer on a second signal,
             # so only stop() may signal it (systemd side: KillMode=mixed).
-            proc = subprocess.Popen(self._argv, stdin=subprocess.DEVNULL,
+            proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    start_new_session=True)
+                                    start_new_session=True,
+                                    pass_fds=(motion_w,) if motion_w is not None else ())
         except OSError as e:
+            if motion_r is not None:
+                os.close(motion_r)
             self._stderr_tail.append(str(e))
             log.error("cannot start ffmpeg: %s", e)
             return
+        finally:
+            if motion_w is not None:
+                os.close(motion_w)  # the child has its own copy; we get EOF when it exits
         with self._lock:
             self._proc = proc
             self._started_at = time.monotonic()
         if self._stop.is_set():  # stop() ran before _proc was visible to it
             proc.terminate()
-        err = threading.Thread(target=self._drain_stderr, args=(proc.stderr,), daemon=True)
-        err.start()
+        readers = [threading.Thread(target=self._drain_stderr, args=(proc.stderr,), daemon=True)]
+        if motion_r is not None:
+            readers.append(threading.Thread(target=self._read_motion, args=(motion_r,), daemon=True))
+        for t in readers:
+            t.start()
         splitter = MjpegSplitter()
         try:
             while chunk := proc.stdout.read1(65536):
@@ -103,9 +123,18 @@ class Recorder:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
-            err.join(timeout=1)
+            for t in readers:
+                t.join(timeout=1)
             with self._lock:
                 self._proc = None
+
+    def _read_motion(self, fd: int) -> None:
+        with open(fd, "rb") as stream:
+            while len(frame := stream.read(self._motion_bytes)) == self._motion_bytes:
+                try:
+                    self._on_motion(frame, time.time())
+                except Exception:  # never stop draining, or ffmpeg would block
+                    log.exception("motion frame handler failed")
 
     def _drain_stderr(self, stream) -> None:
         for raw in stream:

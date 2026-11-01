@@ -112,6 +112,7 @@ def small_cfg():
         "camera": {"device": "testsrc", "width": 320, "height": 180, "input_fps": 10},
         "live": {"width": 160, "height": 90, "fps": 5},
         "recording": {"fps": 5, "segment_seconds": 1, "keyframe_seconds": 1},
+        "motion": {"width": 64, "height": 36, "fps": 5},
         "web": {"password_hash": "scrypt$x"},
     })
 
@@ -149,3 +150,34 @@ def test_real_ffmpeg_writes_indexable_segments(latest, tmp_path):
     assert thumb.startswith(b"\xff\xd8")  # a real JPEG from ffmpeg
     full = store.oldest_first()[1:-1]  # first/last may be partial
     assert all(0.5 <= s.duration <= 1.5 for s in full)
+
+
+def test_motion_frames_arrive_through_the_extra_pipe(latest):
+    got = []
+    script = ("import os, sys\n"
+              "f = os.fdopen(int(sys.argv[1]), 'wb')\n"
+              "f.write(b'a' * 6 + b'b' * 6 + b'c' * 3)\n"
+              "f.flush()\n")
+    rec = Recorder(lambda fd: [sys.executable, "-c", script, str(fd)], latest,
+                   on_motion_frame=lambda frame, ts: got.append(frame), motion_frame_bytes=6)
+    rec.start()
+    try:
+        assert wait_until(lambda: len(got) == 2)
+        assert got == [b"a" * 6, b"b" * 6]   # trailing partial frame is dropped
+    finally:
+        rec.stop()
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_real_ffmpeg_motion_frames(latest, tmp_path):
+    cfg = small_cfg()
+    got = []
+    size = cfg.motion.width * cfg.motion.height
+    rec = Recorder(lambda fd: build_command(cfg, tmp_path, fd), latest,
+                   on_motion_frame=lambda frame, ts: got.append(len(frame)), motion_frame_bytes=size)
+    rec.start()
+    try:
+        assert wait_until(lambda: len(got) >= 3, timeout=10)
+        assert set(got) == {size}
+    finally:
+        rec.stop()

@@ -62,3 +62,16 @@ def test_recording_options_follow_config():
     rec, _ = output_args(build_command(cfg, SEG))
     opts = dict(zip(rec[2:-1:2], rec[3:-1:2]))
     assert (opts["-crf"], opts["-preset"], opts["-g"], opts["-segment_time"]) == ("30", "ultrafast", "15", "30")
+
+
+def test_motion_output_on_extra_fd():
+    argv = build_command(make_cfg("/dev/video0"), SEG, motion_fd=7)
+    assert argv[argv.index("-filter_complex") + 1] == (
+        "[0:v]split=3[r][l][m];[r]fps=10[rec];[l]fps=5,scale=1280:720[live];"
+        "[m]fps=5,scale=320:180,format=gray[motion]")
+    assert argv[-7:] == ["-map", "[motion]", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:7"]
+
+
+def test_no_motion_output_without_fd():
+    argv = build_command(make_cfg("/dev/video0"), SEG)
+    assert "[motion]" not in " ".join(argv) and argv[-1] == "pipe:1"
